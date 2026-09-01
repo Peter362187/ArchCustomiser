@@ -1,0 +1,66 @@
+# =============================================================================
+# Wizard-Schritt 1: Grundkonfiguration
+#
+# Auch Formularseiten sind katalogdefiniert. Ein neues Feld ist ein YAML-Eintrag,
+# kein Python-Code.
+#
+# "choices_from" verweist auf die ChoiceRegistry, die die Liste zur Laufzeit vom
+# System holt (zoneinfo, /usr/share/i18n/SUPPORTED, localectl). Auf Windows
+# greift ein eingebauter Ersatzdatensatz, damit der Wizard dort bedienbar bleibt.
+# "validator" verweist auf die ValidatorRegistry.
+# =============================================================================
+
+schema_version: 1
+
+category:
+  id: basics
+  title: "Grundkonfiguration"
+  subtitle: "Name des Systems, Sprache, Tastatur und Zeitzone."
+  step: 10
+  page_type: form
+  icon: "settings"
+
+fields:
+
+  - id: hostname
+    label: "Hostname"
+    widget: line
+    default: "archcustom"
+    placeholder: "z.B. flos-desktop"
+    required: true
+    validator: hostname
+    help: >-
+      Netzwerkname des Systems. Erlaubt sind Buchstaben, Ziffern und Bindestriche
+      (RFC 1123), maximal 63 Zeichen je Label.
+
+  - id: locale
+    label: "Sprache / Locale"
+    widget: editable_combo
+    default: "de_DE.UTF-8"
+    choices_from: locales
+    required: true
+    validator: locale
+    help: "Bestimmt Sprache, Zahlen- und Datumsformat des Systems."
+
+  - id: keymap
+    label: "Konsolen-Tastaturbelegung"
+    widget: editable_combo
+    default: "de-latin1"
+    choices_from: keymaps
+    required: true
+    validator: keymap
+    help: "Belegung fuer die Textkonsole (vconsole). Die grafische Sitzung erbt sie."
+
+  - id: timezone
+    label: "Zeitzone"
+    widget: editable_combo
+    default: "Europe/Berlin"
+    choices_from: timezones
+    required: true
+    validator: timezone
+
+  - id: ntp
+    label: "Zeit automatisch synchronisieren (NTP)"
+    widget: bool
+    default: true
+    help: "Aktiviert systemd-timesyncd."

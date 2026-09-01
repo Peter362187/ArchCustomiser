@@ -1,0 +1,27 @@
+schema_version: 1
+catalog_version: "2026.09.01"
+name: Desktop
+description: KDE Plasma mit Browser, Office und den ueblichen Werkzeugen.
+
+selections:
+  desktop: [kde]
+  kernel: [linux]
+  audio: [pipewire]
+  network: [networkmanager]
+  drivers: [mesa]
+  apps: [firefox, libreoffice, vlc, okular, archive-tools, shell-tools, fastfetch, git]
+  services: [bluetooth, timesyncd, fstrim]
+
+fields:
+  basics.hostname: arch-desktop
+  basics.locale: de_DE.UTF-8
+  basics.keymap: de-latin1
+  basics.timezone: Europe/Berlin
+  user.create: true
+  user.username: arch
+  user.sudo: true
+  user.autologin: true
+  branding.distro_name: CustomArch
+  branding.version: "1.0"
+  build.include_installer: true
+  build.cow_spacesize: 2G

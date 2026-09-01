@@ -1,0 +1,100 @@
+# =============================================================================
+# Wizard-Schritt 4: Netzwerk
+#
+# "multi", aber mit Capability network-stack (arity=at_most_one, Verstoss nur
+# als Warnung). Beide gleichzeitig zu aktivieren ist technisch moeglich und in
+# Sonderfaellen gewollt, fuehrt aber meist zu widerspruechlicher Konfiguration.
+# Deshalb warnt der Wizard, blockiert aber nicht.
+#
+# Der zugehoerige systemd-Dienst wird automatisch aktiviert (Spec Schritt 4) --
+# das steckt hier im "services"-Block und braucht keine Sonderlogik in der GUI.
+#
+# Verifiziert an archiso/releng:
+#   NetworkManager.service  -> multi-user.target.wants/  + dbus-Alias
+#   systemd-networkd        -> multi-user.target.wants/  + sockets/dbus-Alias
+#   systemd-resolved        -> sysinit.target.wants/
+# =============================================================================
+
+schema_version: 1
+
+category:
+  id: network
+  title: "Netzwerk"
+  subtitle: "Wie das System seine Netzwerkverbindungen verwaltet."
+  step: 40
+  page_type: selection
+  selection_mode: multi
+  required: true
+  min_selected: 1
+  layout: cards
+  columns: 1
+
+options:
+
+  - id: networkmanager
+    order: 10
+    label: "NetworkManager"
+    description: >-
+      Die uebliche Wahl fuer Desktop-Systeme. Bringt WLAN-Verwaltung,
+      grafische Applets und VPN-Unterstuetzung mit.
+    default: true
+    recommended: true
+    packages:
+      - networkmanager
+      - wpa_supplicant
+    provides: [network-stack]
+    services:
+      - unit: NetworkManager.service
+        scope: system
+        action: enable
+        wanted_by: [multi-user.target]
+        aliases: [dbus-org.freedesktop.NetworkManager.service]
+        owned_by: network.networkmanager
+        package: networkmanager
+    semantics:
+      network_config.type: "nm"
+
+  - id: systemd-networkd
+    order: 20
+    label: "systemd-networkd"
+    description: >-
+      Schlank und deklarativ, ohne zusaetzlichen Dienst. Gut fuer Server und
+      Systeme mit fester Netzwerkkonfiguration.
+    packages: []
+    provides: [network-stack]
+    services:
+      - unit: systemd-networkd.service
+        scope: system
+        action: enable
+        wanted_by: [multi-user.target]
+        aliases: [dbus-org.freedesktop.network1.service]
+        owned_by: network.systemd-networkd
+      - unit: systemd-resolved.service
+        scope: system
+        action: enable
+        wanted_by: [sysinit.target]
+        aliases: [dbus-org.freedesktop.resolve1.service]
+        owned_by: network.systemd-resolved
+    semantics:
+      network_config.type: "iso"
+
+  - id: iwd
+    order: 30
+    label: "iwd (WLAN-Backend)"
+    description: >-
+      Modernes WLAN-Backend von Intel. Kann NetworkManager unterlegt werden
+      oder eigenstaendig laufen.
+    packages: [iwd]
+    services:
+      - unit: iwd.service
+        scope: system
+        action: enable
+        wanted_by: [multi-user.target]
+        owned_by: network.iwd
+        package: iwd
+
+  - id: openssh
+    order: 40
+    label: "SSH-Zugang (openssh)"
+    description: "Installiert den SSH-Server. Der Dienst wird separat unter 'Dienste' aktiviert."
+    packages: [openssh]

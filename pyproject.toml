@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "archcustomiser"
+version = "0.4.0"
+description = "Grafischer Builder für individuelle, auf Arch Linux basierende Live-ISOs"
+requires-python = ">=3.11"
+dependencies = [
+    "PySide6>=6.10",
+    "PyYAML>=6.0",
+    "Jinja2>=3.1",
+    # Windows liefert keine Zeitzonendatenbank mit; unter Linux
+    # liest zoneinfo /usr/share/zoneinfo und braucht das Paket nicht.
+    "tzdata; sys_platform == 'win32'",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "pytest-qt>=4.4"]
+
+[project.gui-scripts]
+archcustomiser = "archcustomiser.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+archcustomiser = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-m 'not network' --strict-markers"
+markers = [
+    "network: benötigt echten Netzwerkzugriff (standardmäßig abgewählt)",
+    "linux_only: läuft nur auf Arch/Linux",
+    "slow: braucht mehrere Sekunden (Abbruch- und Zeitverhalten)",
+]

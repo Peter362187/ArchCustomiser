@@ -1,0 +1,163 @@
+# =============================================================================
+# Wizard-Schritt 2a: Desktop-Umgebung
+#
+# Diese Datei ist die EINZIGE Quelle der Wahrheit ueber Desktop-Optionen.
+# Eine neue Desktop-Umgebung ist ein Eintrag unter "options" -- kein Python,
+# kein GUI-Code, kein Neubau der Anwendung.
+#
+# Desktop und Window Manager sind bewusst getrennte Kategorien (siehe
+# 25-windowmanager.yaml). "KDE + Hyprland" ist eine gueltige Kombination;
+# exklusiv ist nur die Capability "display-manager".
+#
+# "semantics" traegt die Werte, die archinstall fuer das INSTALLIERTE System
+# braucht. archinstall will Semantik ("KDE Plasma"), keine Paketnamen -- und
+# diese Zuordnung laesst sich aus einer Paketliste nicht rekonstruieren.
+# =============================================================================
+
+schema_version: 1
+
+category:
+  id: desktop
+  title: "Desktop-Umgebung"
+  subtitle: "Eine vollstaendige Arbeitsumgebung mit Panel, Dateimanager und Einstellungen."
+  step: 20
+  page_type: selection
+  selection_mode: single
+  required: true
+  layout: cards
+  columns: 2
+  help_url: "https://wiki.archlinux.org/title/Desktop_environment"
+  groups:
+    - { id: none,    label: "Ohne Desktop",                order: 0  }
+    - { id: wayland, label: "Wayland-orientiert",          order: 10 }
+    - { id: xorg,    label: "Klassisch / leichtgewichtig", order: 20 }
+
+options:
+
+  - id: none
+    group: none
+    order: 10
+    label: "Kein Desktop"
+    description: >-
+      Reines Textsystem. Ein Window Manager kann im naechsten Schritt trotzdem
+      gewaehlt werden.
+    default: true
+    packages: []
+
+  - id: kde
+    group: wayland
+    order: 10
+    label: "KDE Plasma"
+    description: "Funktionsreich, Wayland als Standard, sehr gute Hardware-Integration."
+    recommended: true
+    tags: [wayland, x11, vollstaendig]
+    est_size_mb: 2400
+    docs: "https://wiki.archlinux.org/title/KDE"
+    packages:
+      - plasma-meta
+      - dolphin
+      - konsole
+      - ark
+      - kate
+      - spectacle
+      - kwalletmanager
+    provides: [graphical-session, qt-desktop, wayland-compositor]
+    implies:
+      - display_manager.sddm
+      - foundation.fonts-base
+      - foundation.wayland-base
+      - foundation.portal-kde
+      - foundation.polkit
+    recommends:
+      - services.bluetooth
+    semantics:
+      profile_config.profile.main: "Desktop"
+      profile_config.profile.details: ["KDE Plasma"]
+
+  - id: gnome
+    group: wayland
+    order: 20
+    label: "GNOME"
+    description: "Aufgeraeumt und stark Wayland-zentriert, GTK-basiert."
+    tags: [wayland, vollstaendig]
+    est_size_mb: 2200
+    docs: "https://wiki.archlinux.org/title/GNOME"
+    packages:
+      - gnome
+      - gnome-tweaks
+      - nautilus
+    provides: [graphical-session, gtk-desktop, wayland-compositor]
+    implies:
+      - display_manager.gdm
+      - foundation.fonts-base
+      - foundation.wayland-base
+      - foundation.portal-gnome
+      - foundation.polkit
+    semantics:
+      profile_config.profile.main: "Desktop"
+      profile_config.profile.details: ["GNOME"]
+
+  - id: xfce
+    group: xorg
+    order: 10
+    label: "XFCE"
+    description: "Leichtgewichtig, stabil, klassisches Xorg-Modell."
+    tags: [x11, leichtgewichtig]
+    est_size_mb: 900
+    packages:
+      - xfce4
+      - xfce4-goodies
+      - network-manager-applet
+    provides: [graphical-session, gtk-desktop, x11-session]
+    implies:
+      - display_manager.lightdm
+      - foundation.fonts-base
+      - foundation.xorg-base
+      - foundation.portal-gtk
+      - foundation.polkit
+    semantics:
+      profile_config.profile.main: "Desktop"
+      profile_config.profile.details: ["Xfce4"]
+
+  - id: cinnamon
+    group: xorg
+    order: 20
+    label: "Cinnamon"
+    description: "Vertrautes Layout mit klassischem Startmenue."
+    tags: [x11, vollstaendig]
+    est_size_mb: 1400
+    packages:
+      - cinnamon
+      - gnome-terminal
+      - nemo-fileroller
+    provides: [graphical-session, gtk-desktop, x11-session]
+    implies:
+      - display_manager.lightdm
+      - foundation.fonts-base
+      - foundation.xorg-base
+      - foundation.portal-gtk
+      - foundation.polkit
+    semantics:
+      profile_config.profile.main: "Desktop"
+      profile_config.profile.details: ["Cinnamon"]
+
+  - id: lxqt
+    group: xorg
+    order: 30
+    label: "LXQt"
+    description: "Sehr sparsam, Qt-basiert, gut fuer aeltere Hardware."
+    tags: [x11, leichtgewichtig]
+    est_size_mb: 700
+    packages:
+      - lxqt
+      - breeze-icons
+      - xdg-utils
+    provides: [graphical-session, qt-desktop, x11-session]
+    implies:
+      - display_manager.sddm
+      - foundation.fonts-base
+      - foundation.xorg-base
+      - foundation.polkit
+    semantics:
+      profile_config.profile.main: "Desktop"
+      profile_config.profile.details: ["Lxqt"]

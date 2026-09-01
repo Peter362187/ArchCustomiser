@@ -1,0 +1,26 @@
+schema_version: 1
+catalog_version: "2026.09.01"
+name: Gaming
+description: KDE mit Zen-Kernel, Steam, Lutris und 32-Bit-Grafikbibliotheken.
+
+selections:
+  desktop: [kde]
+  kernel: [linux-zen]
+  audio: [pipewire]
+  network: [networkmanager]
+  drivers: [mesa, mesa-32, amd-vulkan]
+  apps: [firefox, steam, lutris, gamescope, mangohud, vlc, archive-tools, shell-tools, fastfetch]
+  services: [bluetooth, timesyncd, fstrim]
+
+fields:
+  basics.hostname: arch-gaming
+  basics.locale: de_DE.UTF-8
+  basics.keymap: de-latin1
+  basics.timezone: Europe/Berlin
+  user.create: true
+  user.username: player
+  user.sudo: true
+  branding.distro_name: CustomArch Gaming
+  branding.version: "1.0"
+  build.cow_spacesize: 4G
+  build.compression: balanced

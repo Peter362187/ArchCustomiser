@@ -1,0 +1,37 @@
+# Programmumgebung -- wird mit "pip install -e ." neu erzeugt.
+# Rund 670 MB und plattformabhaengig; gehoert nie in ein Repository.
+.venv/
+venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Ergebnisse und Zwischenstaende des ISO-Baus
+*.iso
+*.tar.gz
+out/
+work/
+*-profil/
+
+# Protokolle
+*.log
+
+# Benutzereigene Profile und Katalog-Overlays gehoeren dem Benutzer,
+# nicht dem Repository. Die mitgelieferten unter profiles/ bleiben drin.
+/profiles-lokal/
+
+# Editoren und Betriebssysteme
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+desktop.ini
+$RECYCLE.BIN/

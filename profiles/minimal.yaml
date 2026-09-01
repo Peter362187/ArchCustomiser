@@ -1,0 +1,22 @@
+schema_version: 1
+catalog_version: "2026.09.01"
+name: Minimal
+description: Textsystem ohne grafische Oberflaeche. Guter Ausgangspunkt fuer Server.
+
+selections:
+  desktop: [none]
+  kernel: [linux]
+  audio: [none]
+  network: [networkmanager]
+  apps: [shell-tools, htop, git]
+  services: [timesyncd]
+
+fields:
+  basics.hostname: archmini
+  basics.locale: de_DE.UTF-8
+  basics.keymap: de-latin1
+  basics.timezone: Europe/Berlin
+  branding.distro_name: MiniArch
+  branding.version: "1.0"
+  build.include_installer: true
+  build.compression: fast

@@ -1,0 +1,80 @@
+# =============================================================================
+# Wizard-Schritt 5: Audio
+#
+# Capability "audio-server" mit arity=at_most_one und auto_resolve=
+# deselect_previous: waehlt der Benutzer PulseAudio, wird PipeWire automatisch
+# abgewaehlt statt einen Fehler zu erzeugen. Beide beanspruchen dieselben
+# Sockets und koennen nicht parallel laufen.
+#
+# PipeWire ist Vorgabe (Spec Schritt 5).
+# =============================================================================
+
+schema_version: 1
+
+category:
+  id: audio
+  title: "Audio"
+  subtitle: "Welches Audio-System verwendet werden soll."
+  step: 50
+  page_type: selection
+  selection_mode: single
+  required: true
+  layout: cards
+  columns: 1
+
+options:
+
+  - id: pipewire
+    order: 10
+    label: "PipeWire"
+    description: >-
+      Der aktuelle Standard unter Arch. Ersetzt PulseAudio und JACK, kann beide
+      Protokolle bedienen, und unterstuetzt Screensharing unter Wayland.
+    default: true
+    recommended: true
+    packages:
+      - pipewire
+      - pipewire-alsa
+      - pipewire-pulse
+      - pipewire-jack
+      - wireplumber
+    provides: [audio-server]
+    services:
+      - unit: pipewire.service
+        scope: user
+        action: enable
+        wanted_by: [default.target]
+        owned_by: audio.pipewire
+      - unit: wireplumber.service
+        scope: user
+        action: enable
+        wanted_by: [default.target]
+        owned_by: audio.wireplumber
+    semantics:
+      audio_config.audio: "pipewire"
+
+  - id: pulseaudio
+    order: 20
+    label: "PulseAudio"
+    description: "Der klassische Audio-Server. Nur waehlen, wenn eine Anwendung ihn zwingend braucht."
+    packages:
+      - pulseaudio
+      - pulseaudio-alsa
+      - pavucontrol
+    provides: [audio-server]
+    services:
+      - unit: pulseaudio.service
+        scope: user
+        action: enable
+        wanted_by: [default.target]
+        owned_by: audio.pulseaudio
+    semantics:
+      audio_config.audio: "pulseaudio"
+
+  - id: none
+    order: 30
+    label: "Keine Audio-Unterstuetzung"
+    description: "Kein Audio-Server. Sinnvoll fuer Server- und Kiosk-Systeme."
+    packages: []
+    semantics:
+      audio_config.audio: "no_audio"

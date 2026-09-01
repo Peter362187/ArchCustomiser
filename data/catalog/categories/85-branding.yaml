@@ -1,0 +1,116 @@
+# =============================================================================
+# Wizard-Schritt 10: Branding
+#
+# Wirkt auf ISO-Dateiname, ISO-Label, Bootmenue, /etc/os-release, Hintergrund
+# und Login-Screen (Spec Abschnitt 7).
+#
+# MARKENRECHT -- Arch Linux Trademark Policy (Fassung 2021-04-18):
+# Die Policy stellt fest, dass jede Marke, die mit den Buchstaben "ARCH"
+# beginnt, als hinreichend aehnlich gilt und einer Erlaubnis beduerfte.
+# Ausdruecklich erlaubt ist dagegen die Formulierung, ein System sei
+# "based on Arch Linux".
+#
+# Der Validator "distro_name" setzt das um: er lehnt Namen ab, die sich als
+# Arch Linux ausgeben, und der Generator erzwingt ID_LIKE=arch in
+# /etc/os-release. Das ist zugleich der maschinenlesbare Herkunftsnachweis nach
+# os-release(5) -- das System macht damit keine falsche Angabe ueber seine
+# Herkunft, wie es die Spezifikation verlangt.
+#
+# Nicht selbst setzen: IMAGE_ID und IMAGE_VERSION. mkarchiso loescht beide per
+# sed und schreibt sie aus iso_name/iso_version neu.
+# =============================================================================
+
+schema_version: 1
+
+category:
+  id: branding
+  title: "Branding"
+  subtitle: "Name, Version und Aussehen der eigenen Distribution."
+  step: 85
+  page_type: form
+  icon: "brush"
+
+fields:
+
+  - id: distro_name
+    label: "Name der Distribution"
+    widget: line
+    default: "CustomArch"
+    placeholder: "z.B. FLOS"
+    required: true
+    validator: distro_name
+    help: >-
+      Erscheint im Bootmenue, in /etc/os-release und im Dateinamen der ISO.
+      Namen, die mit "Arch" beginnen oder sich als Arch Linux ausgeben, sind
+      nach der Arch-Markenrichtlinie nicht zulaessig.
+
+  - id: version
+    label: "Version"
+    widget: line
+    default: "1.0"
+    required: true
+    validator: version_string
+    help: "Freie Versionsbezeichnung, z.B. 1.0 oder 2026.09."
+
+  - id: iso_label
+    label: "ISO-Datentraegerbezeichnung"
+    widget: line
+    placeholder: "wird aus Name und Version abgeleitet"
+    validator: iso_label
+    help: >-
+      Leer lassen fuer automatische Ableitung. ISO-9660 erlaubt nur
+      Grossbuchstaben, Ziffern und Unterstrich, maximal 32 Zeichen.
+
+  - id: install_dir
+    label: "Verzeichnisname auf der ISO"
+    widget: line
+    placeholder: "wird aus dem Namen abgeleitet"
+    validator: install_dir
+    help: >-
+      Leer lassen fuer automatische Ableitung. Erlaubt sind ausschliesslich
+      Kleinbuchstaben und Ziffern, maximal 30 Zeichen (von mkarchiso geprueft).
+
+  - id: publisher
+    label: "Herausgeber"
+    widget: line
+    placeholder: "z.B. Jason <jason@example.org>"
+    help: "Wird als ISO-Metadatum hinterlegt."
+
+  - id: logo
+    label: "Logo"
+    widget: path
+    file_filter: "Bilder (*.png *.svg)"
+    validator: image_file
+    help: "Wird als Systemlogo hinterlegt und von fastfetch angezeigt."
+
+  - id: wallpaper
+    label: "Desktop-Hintergrund"
+    widget: path
+    file_filter: "Bilder (*.png *.jpg *.jpeg)"
+    validator: image_file
+    help: "Landet in /etc/skel und gilt damit auch im spaeter installierten System."
+
+  - id: splash
+    label: "Hintergrundbild des Bootmenues"
+    widget: path
+    file_filter: "PNG-Bilder (*.png)"
+    validator: splash_image
+    help: "640x480 PNG fuer das BIOS-Bootmenue (syslinux)."
+
+  - id: home_url
+    label: "Projekt-Webseite"
+    widget: line
+    placeholder: "https://example.org/"
+    validator: url
+    help: "Erscheint als HOME_URL in /etc/os-release."
+
+  - id: bug_url
+    label: "Adresse fuer Fehlermeldungen"
+    widget: line
+    placeholder: "https://example.org/issues"
+    validator: url
+
+  - id: boot_menu_title
+    label: "Titel im Bootmenue"
+    widget: line
+    placeholder: "wird aus Name und Version abgeleitet"

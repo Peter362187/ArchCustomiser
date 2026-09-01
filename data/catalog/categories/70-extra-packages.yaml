@@ -1,0 +1,22 @@
+# =============================================================================
+# Wizard-Schritt 7: Zusaetzliche Pakete
+#
+# Freie Eingabe. Die zugehoerige Seite (page_type: free_packages) validiert
+# jeden Namen gegen den geladenen Repo-Index, schlaegt bei Tippfehlern
+# Alternativen vor und erkennt Paketgruppen sowie virtuelle Pakete.
+#
+# Die Seite hat keine Optionen -- ihr Inhalt ist die Eingabeliste selbst.
+# =============================================================================
+
+schema_version: 1
+
+category:
+  id: extra_packages
+  title: "Zusaetzliche Pakete"
+  subtitle: >-
+    Beliebige Pakete aus den offiziellen Arch-Repositories. Jeder Name wird
+    sofort geprueft.
+  step: 70
+  page_type: free_packages
+  icon: "package"
+  help_url: "https://archlinux.org/packages/"

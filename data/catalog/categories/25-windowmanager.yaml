@@ -1,0 +1,94 @@
+# =============================================================================
+# Wizard-Schritt 2b: Window Manager
+#
+# Bewusst "multi": mehrere Window Manager koennen parallel installiert sein,
+# die Auswahl faellt real erst im Login-Screen. Deshalb auch kein Konflikt mit
+# der Desktop-Kategorie -- "KDE + Hyprland" ist eine verbreitete Kombination.
+#
+# requires_any auf "cap:display-manager" bzw. TTY-Autologin: ohne beides gaebe
+# es keinen Weg, die Sitzung zu starten.
+# =============================================================================
+
+schema_version: 1
+
+category:
+  id: windowmanager
+  title: "Window Manager"
+  subtitle: >-
+    Minimalistische Fensterverwaltung ohne kompletten Desktop. Kann zusaetzlich
+    zu einer Desktop-Umgebung installiert werden.
+  step: 25
+  page_type: selection
+  selection_mode: multi
+  required: false
+  layout: cards
+  columns: 2
+  groups:
+    - { id: wayland, label: "Wayland", order: 10 }
+    - { id: xorg,    label: "Xorg",    order: 20 }
+
+options:
+
+  - id: hyprland
+    group: wayland
+    order: 10
+    label: "Hyprland"
+    description: "Dynamischer Wayland-Compositor mit Animationen und Tiling."
+    tags: [wayland, tiling]
+    est_size_mb: 350
+    docs: "https://wiki.archlinux.org/title/Hyprland"
+    packages:
+      - hyprland
+      - waybar
+      - wofi
+      - kitty
+      - hyprpaper
+      - grim
+      - slurp
+    provides: [graphical-session, wayland-compositor]
+    implies:
+      - foundation.wayland-base
+      - foundation.fonts-base
+      - foundation.polkit
+    requires_any: ["cap:display-manager"]
+
+  - id: sway
+    group: wayland
+    order: 20
+    label: "Sway"
+    description: "i3-kompatibles Tiling unter Wayland."
+    tags: [wayland, tiling]
+    est_size_mb: 250
+    packages:
+      - sway
+      - swaybg
+      - swayidle
+      - swaylock
+      - foot
+      - wmenu
+    provides: [graphical-session, wayland-compositor]
+    implies:
+      - foundation.wayland-base
+      - foundation.fonts-base
+      - foundation.portal-wlr
+      - foundation.polkit
+    requires_any: ["cap:display-manager"]
+
+  - id: i3
+    group: xorg
+    order: 10
+    label: "i3"
+    description: "Der klassische Tiling-Window-Manager fuer Xorg."
+    tags: [x11, tiling]
+    est_size_mb: 150
+    packages:
+      - i3-wm
+      - i3status
+      - i3lock
+      - dmenu
+      - xterm
+    provides: [graphical-session, x11-session]
+    implies:
+      - foundation.xorg-base
+      - foundation.fonts-base
+    requires_any: ["cap:display-manager"]

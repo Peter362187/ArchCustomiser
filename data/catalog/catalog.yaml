@@ -1,0 +1,95 @@
+# =============================================================================
+# Katalog-Index
+#
+# Diese Datei deklariert, welche Kategoriedateien geladen werden, in welcher
+# Reihenfolge der Wizard sie zeigt, und welche abstrakten Rollen ("Capabilities")
+# es gibt.
+#
+# Capabilities ersetzen explizite Konfliktlisten. Statt jede Audio-Option gegen
+# jede andere zu deklarieren, liefern alle die Capability "audio-server" mit
+# arity=at_most_one. Eine neue Audio-Option erbt die Regel automatisch.
+# =============================================================================
+
+schema_version: 1
+catalog_version: "2026.09.01"
+name: "Standard-Katalog"
+
+capabilities:
+
+  graphical-session:
+    label: "Grafische Sitzung"
+    arity: many
+    description: >-
+      Irgendetwas liefert eine grafische Oberflaeche. Desktop-Umgebungen und
+      Window Manager duerfen gleichzeitig installiert sein -- die Wahl faellt
+      real erst im Login-Screen.
+
+  display-manager:
+    label: "Display-Manager"
+    arity: one
+    on_violation: error
+    auto_resolve: deselect_previous
+    required_if: ["cap:graphical-session"]
+    default_provider: "display_manager.sddm"
+    description: >-
+      Genau ein Login-Screen. Mehrere gleichzeitig aktivierte Display-Manager
+      streiten sich um /etc/systemd/system/display-manager.service.
+
+  audio-server:
+    label: "Audio-Server"
+    arity: at_most_one
+    on_violation: error
+    auto_resolve: deselect_previous
+    description: >-
+      PipeWire und PulseAudio beanspruchen dieselben Sockets und koennen nicht
+      parallel laufen.
+
+  network-stack:
+    label: "Netzwerk-Verwaltung"
+    arity: at_most_one
+    on_violation: warning
+    auto_resolve: none
+    description: >-
+      NetworkManager und systemd-networkd gleichzeitig zu aktivieren ist
+      technisch moeglich, fuehrt aber regelmaessig zu widerspruechlicher
+      Konfiguration. Deshalb Warnung statt Blockade.
+
+  wayland-compositor:
+    label: "Wayland-Compositor"
+    arity: many
+
+  x11-session:
+    label: "Xorg-Sitzung"
+    arity: many
+
+  qt-desktop:
+    label: "Qt-basierte Oberflaeche"
+    arity: many
+
+  gtk-desktop:
+    label: "GTK-basierte Oberflaeche"
+    arity: many
+
+  container-runtime:
+    label: "Container-Laufzeit"
+    arity: many
+
+wizard:
+  step_order:
+    - basics
+    - desktop
+    - windowmanager
+    - kernel
+    - network
+    - audio
+    - apps
+    - drivers
+    - extra_packages
+    - services
+    - user
+    - branding
+    - build
+    - summary
+
+includes:
+  - "categories/*.yaml"

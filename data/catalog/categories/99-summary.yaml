@@ -1,0 +1,20 @@
+# =============================================================================
+# Wizard-Schritt 12: Zusammenfassung / Dry-Run
+#
+# Zeigt den vollstaendigen Bauplan, bevor irgendetwas passiert (Spec Abschnitt
+# 14): Auswahl, aufgeloeste Paketliste, systemd-Symlinks, abgeleiteter
+# ISO-Dateiname, Alter der Paketdaten und alle offenen Hinweise.
+#
+# Diese Seite hat weder Optionen noch Felder -- ihr Inhalt wird vollstaendig
+# aus dem aufgeloesten Zustand erzeugt.
+# =============================================================================
+
+schema_version: 1
+
+category:
+  id: summary
+  title: "Zusammenfassung"
+  subtitle: "Pruefen, was gebaut wird -- danach kann die ISO erstellt werden."
+  step: 99
+  page_type: summary
+  icon: "check"

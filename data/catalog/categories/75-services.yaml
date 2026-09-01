@@ -1,0 +1,125 @@
+# =============================================================================
+# Wizard-Schritt 8: Dienste
+#
+# Hier stehen nur Dienste, die der Benutzer bewusst an- oder abschalten soll.
+# Dienste, die untrennbar zu einer Auswahl gehoeren (sddm bei KDE,
+# NetworkManager bei der Netzwerkauswahl), stehen bei der jeweiligen Option und
+# tauchen hier NICHT nochmal auf -- sonst koennte man KDE waehlen und den
+# Login-Screen versehentlich abschalten.
+#
+# Die Symlink-Pfade sind gegen die echten [Install]-Sektionen verifiziert:
+#   bluetooth.service -> bluetooth.target.wants/ + Alias dbus-org.bluez.service
+#   sshd.service      -> multi-user.target.wants/
+#   docker.service    -> multi-user.target.wants/
+#   systemd-timesyncd -> sysinit.target.wants/  + Alias dbus-org.freedesktop.timesync1
+# =============================================================================
+
+schema_version: 1
+
+category:
+  id: services
+  title: "Dienste"
+  subtitle: "Systemdienste, die beim Start automatisch laufen sollen."
+  step: 75
+  page_type: selection
+  selection_mode: multi
+  layout: list
+
+options:
+
+  - id: bluetooth
+    order: 10
+    label: "Bluetooth"
+    description: "Bluetooth-Stack samt Verwaltungsdienst."
+    packages: [bluez, bluez-utils]
+    services:
+      - unit: bluetooth.service
+        scope: system
+        action: enable
+        wanted_by: [bluetooth.target]
+        aliases: [dbus-org.bluez.service]
+        owned_by: services.bluetooth
+        package: bluez
+    semantics:
+      app_config.bluetooth_config.enabled: true
+
+  - id: sshd
+    order: 20
+    label: "SSH-Server (sshd)"
+    description: >-
+      Erlaubt Fernzugriff per SSH. Auf einem Live-System bedeutet das einen
+      offenen Netzwerkdienst -- nur aktivieren, wenn das gewollt ist.
+    packages: [openssh]
+    services:
+      - unit: sshd.service
+        scope: system
+        action: enable
+        wanted_by: [multi-user.target]
+        owned_by: services.sshd
+        package: openssh
+
+  - id: docker
+    order: 30
+    label: "Docker-Dienst"
+    description: "Startet die Container-Laufzeit beim Systemstart."
+    requires: [apps.docker]
+    services:
+      - unit: docker.service
+        scope: system
+        action: enable
+        wanted_by: [multi-user.target]
+        owned_by: services.docker
+        package: docker
+
+  - id: timesyncd
+    order: 40
+    label: "Zeitsynchronisation (NTP)"
+    description: "Haelt die Systemuhr ueber das Netz genau."
+    default: true
+    packages: []
+    services:
+      - unit: systemd-timesyncd.service
+        scope: system
+        action: enable
+        wanted_by: [sysinit.target]
+        aliases: [dbus-org.freedesktop.timesync1.service]
+        owned_by: services.timesyncd
+
+  - id: firewalld
+    order: 50
+    label: "Firewall (firewalld)"
+    description: "Zonenbasierte Firewall mit grafischer Verwaltung."
+    packages: [firewalld]
+    services:
+      - unit: firewalld.service
+        scope: system
+        action: enable
+        wanted_by: [multi-user.target]
+        aliases: [dbus-org.fedoraproject.FirewallD1.service]
+        owned_by: services.firewalld
+        package: firewalld
+
+  - id: fstrim
+    order: 60
+    label: "SSD-TRIM (woechentlich)"
+    description: "Haelt SSDs langfristig schnell."
+    packages: [util-linux]
+    services:
+      - unit: fstrim.timer
+        scope: system
+        action: enable
+        wanted_by: [timers.target]
+        owned_by: services.fstrim
+
+  - id: reflector
+    order: 70
+    label: "Spiegelserver-Aktualisierung (reflector)"
+    description: "Sortiert die pacman-Spiegelserver regelmaessig nach Geschwindigkeit."
+    packages: [reflector]
+    services:
+      - unit: reflector.timer
+        scope: system
+        action: enable
+        wanted_by: [timers.target]
+        owned_by: services.reflector
+        package: reflector

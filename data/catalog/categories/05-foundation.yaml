@@ -1,0 +1,103 @@
+# =============================================================================
+# Unsichtbare Basis-Bausteine.
+#
+# Diese Kategorie erscheint NICHT im Wizard. Sie wird ausschliesslich ueber
+# "implies" anderer Optionen befuellt und buendelt Pakete, die mehrere Optionen
+# gemeinsam brauchen. Ohne sie muesste z.B. jede Wayland-Option dieselbe
+# Paketliste wiederholen.
+#
+# Der Resolver dedupliziert Mehrfachbeitraege, es ist also unschaedlich, wenn
+# KDE und Sway beide "foundation.wayland-base" implizieren.
+# =============================================================================
+
+schema_version: 1
+
+category:
+  id: foundation
+  title: "Basiskomponenten"
+  step: 5
+  visible: false
+  page_type: selection
+  selection_mode: multi
+
+options:
+
+  - id: fonts-base
+    label: "Schriftarten"
+    description: "Grundausstattung, ohne die viele Oberflaechen Kaestchen statt Zeichen zeigen."
+    packages:
+      - noto-fonts
+      - noto-fonts-emoji
+      - ttf-dejavu
+      - ttf-liberation
+
+  - id: xorg-base
+    label: "Xorg-Basis"
+    description: "X-Server und Eingabetreiber fuer klassische Desktops und Window Manager."
+    packages:
+      - xorg-server
+      - xorg-xinit
+      - xorg-xrandr
+      - xf86-input-libinput
+    provides: [x11-session]
+
+  - id: wayland-base
+    label: "Wayland-Basis"
+    description: "Wayland-Bibliotheken und Xwayland fuer X11-Anwendungen."
+    packages:
+      - wayland
+      - xorg-xwayland
+      - qt6-wayland
+      - libva-utils
+
+  - id: portal-base
+    label: "XDG Desktop Portal"
+    description: "Vermittelt Dateidialoge und Screensharing an sandboxed Anwendungen."
+    packages:
+      - xdg-desktop-portal
+      - xdg-utils
+
+  - id: portal-kde
+    label: "Portal-Backend (KDE)"
+    packages: [xdg-desktop-portal-kde]
+    implies: [foundation.portal-base]
+
+  - id: portal-gnome
+    label: "Portal-Backend (GNOME)"
+    packages: [xdg-desktop-portal-gnome]
+    implies: [foundation.portal-base]
+
+  - id: portal-gtk
+    label: "Portal-Backend (GTK)"
+    packages: [xdg-desktop-portal-gtk]
+    implies: [foundation.portal-base]
+
+  - id: portal-wlr
+    label: "Portal-Backend (wlroots)"
+    description: "Screensharing unter Sway und verwandten Compositors."
+    packages: [xdg-desktop-portal-wlr]
+    implies: [foundation.portal-base]
+
+  - id: polkit
+    label: "Rechteverwaltung (polkit)"
+    description: "Erlaubt Anwendungen, punktuell erhoehte Rechte anzufordern."
+    packages: [polkit]
+
+  - id: graphical-target
+    label: "Grafischer Systemstart"
+    description: >-
+      Setzt default.target auf graphical.target. Ohne das startet die
+      Live-Sitzung in der Textkonsole, auch wenn ein Display-Manager
+      installiert ist.
+    packages: []
+    services:
+      - unit: graphical.target
+        scope: system
+        action: enable
+        aliases: [default.target]
+        owned_by: default_target
+        # Nur die Live-Sitzung. Im installierten System setzt archinstall das
+        # Standard-Target selbst; ein "systemctl enable graphical.target"
+        # waere dort wirkungslos und wuerde nur die Dienstliste verunreinigen.
+        enable_in: live
+        reason: "Grafischer Start der Live-Sitzung"

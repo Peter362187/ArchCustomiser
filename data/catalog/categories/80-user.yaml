@@ -1,0 +1,92 @@
+# =============================================================================
+# Wizard-Schritt 9: Benutzerkonto
+#
+# Sicherheitsrelevant (Spec Abschnitt 6/12):
+#   * Passwortfelder tragen "secret: true". Ihr Wert landet im SecretStore,
+#     niemals in BuildConfig und damit strukturell niemals in einem Profil.
+#   * Geheime Felder duerfen keinen Vorgabewert haben -- der Loader lehnt das ab.
+#   * Der Log-Filter maskiert die Werte zusaetzlich in allen Log-Ausgaben.
+#
+# Der Root-Zugang bleibt standardmaessig gesperrt. Das entspricht dem, was
+# archiso/releng fuer die offizielle ISO tut, und ist fuer ein Desktop-Image
+# die richtige Vorgabe.
+# =============================================================================
+
+schema_version: 1
+
+category:
+  id: user
+  title: "Benutzerkonto"
+  subtitle: "Ein Standardbenutzer fuer das System. Optional."
+  step: 80
+  page_type: form
+  icon: "user"
+
+fields:
+
+  - id: create
+    label: "Benutzerkonto anlegen"
+    widget: bool
+    default: true
+
+  - id: username
+    label: "Benutzername"
+    widget: line
+    default: "arch"
+    placeholder: "z.B. jason"
+    validator: username
+    required: true
+    enabled_when: "field:user.create"
+    help: >-
+      Kleinbuchstaben, Ziffern, Bindestrich und Unterstrich; muss mit einem
+      Buchstaben oder Unterstrich beginnen (maximal 32 Zeichen).
+
+  - id: full_name
+    label: "Vollstaendiger Name"
+    widget: line
+    placeholder: "z.B. Jason"
+    validator: gecos
+    enabled_when: "field:user.create"
+    help: "Erscheint im Login-Screen. Doppelpunkte sind nicht erlaubt."
+
+  - id: password
+    label: "Passwort"
+    widget: password
+    secret: true
+    validator: password
+    confirm_field: password_confirm
+    enabled_when: "field:user.create"
+    help: >-
+      Wird nicht gespeichert und erscheint nicht in Profilen oder Logs. Beim
+      Erzeugen der ISO wird daraus ein yescrypt-Hash gebildet.
+
+  - id: password_confirm
+    label: "Passwort wiederholen"
+    widget: password
+    secret: true
+    enabled_when: "field:user.create"
+
+  - id: sudo
+    label: "Darf Administratorrechte verwenden (sudo)"
+    widget: bool
+    default: true
+    enabled_when: "field:user.create"
+    help: "Nimmt den Benutzer in die Gruppe 'wheel' auf."
+
+  - id: autologin
+    label: "In der Live-Sitzung automatisch anmelden"
+    widget: bool
+    default: true
+    enabled_when: "field:user.create"
+    help: >-
+      Gilt nur fuer das Live-System von der ISO, nicht fuer das spaeter
+      installierte System.
+
+  - id: root_locked
+    label: "Root-Konto sperren"
+    widget: bool
+    default: true
+    help: >-
+      Empfohlen. Administratorrechte laufen dann ausschliesslich ueber sudo.
+      Ohne Sperre und ohne Root-Passwort waere ein passwortloser Root-Login
+      moeglich.

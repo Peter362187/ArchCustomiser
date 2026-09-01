@@ -1,0 +1,25 @@
+schema_version: 1
+catalog_version: "2026.09.01"
+name: Entwicklung
+description: Arbeitsumgebung mit Toolchain, Containern und Editoren.
+
+selections:
+  desktop: [kde]
+  kernel: [linux]
+  audio: [pipewire]
+  network: [networkmanager, openssh]
+  drivers: [mesa]
+  apps: [firefox, git, python, nodejs, docker, toolchain, neovim, vscodium, btop, archive-tools, shell-tools, fastfetch]
+  services: [docker, sshd, timesyncd, fstrim]
+
+fields:
+  basics.hostname: arch-dev
+  basics.locale: de_DE.UTF-8
+  basics.keymap: de-latin1
+  basics.timezone: Europe/Berlin
+  user.create: true
+  user.username: dev
+  user.sudo: true
+  branding.distro_name: DevArch
+  branding.version: "1.0"
+  build.compression: fast

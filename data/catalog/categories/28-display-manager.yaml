@@ -1,0 +1,82 @@
+# =============================================================================
+# Display-Manager -- unsichtbare Kategorie.
+#
+# Erscheint nicht als Wizard-Seite. Wird ueber "implies" der Desktop-Optionen
+# gesetzt bzw. vom Resolver aus capabilities.display-manager.default_provider
+# ergaenzt, sobald irgendeine grafische Sitzung gewaehlt ist. Im Dry-Run ist die
+# Auswahl sichtbar und als "automatisch ergaenzt" gekennzeichnet.
+#
+# WICHTIG -- verifiziert an archiso/releng und den echten Unit-Dateien:
+# Ein Display-Manager wird NICHT ueber einen ".wants"-Symlink aktiviert.
+# sddm.service traegt in [Install] nur "Alias=display-manager.service".
+# "systemctl enable sddm" erzeugt also:
+#     /etc/systemd/system/display-manager.service -> /usr/lib/systemd/system/sddm.service
+# Ein Symlink unter graphical.target.wants/ waere wirkungslos. Genau deshalb
+# steht "aliases" statt "wanted_by" in den Eintraegen unten.
+#
+# Zusaetzlich muss default.target auf graphical.target zeigen, sonst bootet die
+# Live-Session in die Textkonsole. Das erledigt die Option "graphical-target".
+# =============================================================================
+
+schema_version: 1
+
+category:
+  id: display_manager
+  title: "Display-Manager"
+  step: 28
+  visible: false
+  page_type: selection
+  selection_mode: single
+
+options:
+
+  - id: sddm
+    label: "SDDM"
+    description: "Qt-basierter Login-Screen. Standard fuer KDE Plasma und LXQt."
+    packages: [sddm]
+    provides: [display-manager]
+    implies: [foundation.graphical-target]
+    services:
+      - unit: sddm.service
+        scope: system
+        action: enable
+        aliases: [display-manager.service]
+        wanted_by: []
+        owned_by: display_manager
+        enable_in: both
+        package: sddm
+        reason: "Login-Screen"
+    semantics:
+      profile_config.greeter: "sddm"
+
+  - id: gdm
+    label: "GDM"
+    description: "GNOME Display Manager."
+    packages: [gdm]
+    provides: [display-manager]
+    implies: [foundation.graphical-target]
+    services:
+      - unit: gdm.service
+        scope: system
+        action: enable
+        aliases: [display-manager.service]
+        owned_by: display_manager
+        package: gdm
+    semantics:
+      profile_config.greeter: "gdm"
+
+  - id: lightdm
+    label: "LightDM"
+    description: "Schlanker Login-Screen mit GTK-Oberflaeche."
+    packages: [lightdm, lightdm-gtk-greeter]
+    provides: [display-manager]
+    implies: [foundation.graphical-target]
+    services:
+      - unit: lightdm.service
+        scope: system
+        action: enable
+        aliases: [display-manager.service]
+        owned_by: display_manager
+        package: lightdm
+    semantics:
+      profile_config.greeter: "lightdm"

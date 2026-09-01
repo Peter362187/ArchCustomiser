@@ -1,0 +1,61 @@
+# =============================================================================
+# Wizard-Schritt 3: Kernel
+#
+# Der Kernelname steuert mehr als nur ein Paket: mkarchiso kopiert per Glob
+# /boot/vmlinuz-* und /boot/initramfs-*.img, und die mkinitcpio-Preset-Datei
+# muss exakt "<kernel>.preset" heissen. Bei linux-zen sind das
+#     airootfs/etc/mkinitcpio.d/linux-zen.preset
+#     vmlinuz-linux-zen / initramfs-linux-zen.img
+# und ALLE Bootmenue-Eintraege muessen dieselben Dateinamen referenzieren.
+#
+# Deshalb traegt jede Option "semantics.kernel_suffix": Phase 5 rendert Preset
+# und Bootmenue aus derselben Variable, statt den Namen an drei Stellen zu raten.
+# =============================================================================
+
+schema_version: 1
+
+category:
+  id: kernel
+  title: "Kernel"
+  subtitle: "Welche Kernel-Variante das System verwenden soll."
+  step: 30
+  page_type: selection
+  selection_mode: single
+  required: true
+  layout: cards
+  columns: 1
+
+options:
+
+  - id: linux
+    order: 10
+    label: "linux"
+    description: "Der aktuelle Standard-Kernel von Arch. Fuer die meisten Systeme die richtige Wahl."
+    default: true
+    recommended: true
+    packages: [linux, linux-firmware]
+    semantics:
+      kernels: ["linux"]
+      kernel_suffix: "linux"
+
+  - id: linux-lts
+    order: 20
+    label: "linux-lts"
+    description: >-
+      Langzeitunterstuetzte Version. Konservativer, gut fuer aeltere Hardware
+      und Systeme, die selten aktualisiert werden.
+    packages: [linux-lts, linux-firmware]
+    semantics:
+      kernels: ["linux-lts"]
+      kernel_suffix: "linux-lts"
+
+  - id: linux-zen
+    order: 30
+    label: "linux-zen"
+    description: >-
+      Auf Reaktionsfreudigkeit optimiert. Beliebt fuer Desktop- und
+      Gaming-Systeme.
+    packages: [linux-zen, linux-firmware]
+    semantics:
+      kernels: ["linux-zen"]
+      kernel_suffix: "linux-zen"

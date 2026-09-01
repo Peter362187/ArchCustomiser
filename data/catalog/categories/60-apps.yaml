@@ -1,0 +1,227 @@
+# =============================================================================
+# Wizard-Schritt 6: Programme
+#
+# Die Paketliste ist bewusst NICHT im GUI-Code hinterlegt (Spec Abschnitt 3).
+# Ein neues Programm ist ein Eintrag hier -- die GUI zeichnet daraus automatisch
+# eine Checkbox in der passenden Gruppe.
+#
+# "repos: [multilib]" bei Steam ist mehr als Deko: Steam liegt im
+# multilib-Repository, das in der Standard-pacman.conf auskommentiert ist. Der
+# Resolver schaltet multilib daraufhin automatisch frei -- sowohl in der
+# generierten pacman.conf des Live-Systems als auch in
+# mirror_config.optional_repositories der archinstall-Konfiguration.
+# =============================================================================
+
+schema_version: 1
+
+category:
+  id: apps
+  title: "Programme"
+  subtitle: "Anwendungen, die im fertigen System bereitstehen sollen."
+  step: 60
+  page_type: selection
+  selection_mode: multi
+  layout: grid
+  columns: 2
+  groups:
+    - { id: browser, label: "Browser",       order: 10 }
+    - { id: office,  label: "Office",        order: 20 }
+    - { id: media,   label: "Multimedia",    order: 30 }
+    - { id: gaming,  label: "Gaming",        order: 40 }
+    - { id: dev,     label: "Entwicklung",   order: 50 }
+    - { id: tools,   label: "Werkzeuge",     order: 60 }
+
+options:
+
+  # -- Browser ---------------------------------------------------------------
+  - id: firefox
+    group: browser
+    order: 10
+    label: "Firefox"
+    description: "Freier Browser von Mozilla."
+    recommended: true
+    est_size_mb: 300
+    packages: [firefox]
+
+  - id: chromium
+    group: browser
+    order: 20
+    label: "Chromium"
+    description: "Quelloffene Basis von Google Chrome."
+    est_size_mb: 350
+    packages: [chromium]
+
+  # -- Office ----------------------------------------------------------------
+  - id: libreoffice
+    group: office
+    order: 10
+    label: "LibreOffice"
+    description: "Vollstaendiges Office-Paket (frische Version)."
+    est_size_mb: 900
+    packages: [libreoffice-fresh]
+    implies: [foundation.fonts-base]
+
+  - id: thunderbird
+    group: office
+    order: 20
+    label: "Thunderbird"
+    description: "E-Mail-Programm von Mozilla."
+    packages: [thunderbird]
+
+  - id: okular
+    group: office
+    order: 30
+    label: "Okular"
+    description: "PDF- und Dokumentenbetrachter."
+    packages: [okular]
+
+  # -- Multimedia ------------------------------------------------------------
+  - id: vlc
+    group: media
+    order: 10
+    label: "VLC"
+    description: "Spielt praktisch jedes Video- und Audioformat ab."
+    packages: [vlc]
+
+  - id: mpv
+    group: media
+    order: 20
+    label: "mpv"
+    description: "Schlanker, tastaturorientierter Videoplayer."
+    packages: [mpv]
+
+  - id: gimp
+    group: media
+    order: 30
+    label: "GIMP"
+    description: "Bildbearbeitung."
+    est_size_mb: 450
+    packages: [gimp]
+
+  # -- Gaming ----------------------------------------------------------------
+  - id: steam
+    group: gaming
+    order: 10
+    label: "Steam"
+    description: >-
+      Spieleplattform von Valve. Benoetigt das multilib-Repository, das
+      automatisch aktiviert wird.
+    est_size_mb: 500
+    packages: [steam]
+    repos: [multilib]
+    implies: [foundation.fonts-base]
+
+  - id: lutris
+    group: gaming
+    order: 20
+    label: "Lutris"
+    description: "Verwaltet Spiele aus verschiedenen Quellen, inklusive Wine-Titeln."
+    packages: [lutris, wine]
+    repos: [multilib]
+
+  - id: gamescope
+    group: gaming
+    order: 30
+    label: "Gamescope"
+    description: "Micro-Compositor von Valve fuer skaliertes und bildratengesteuertes Spielen."
+    packages: [gamescope]
+
+  - id: mangohud
+    group: gaming
+    order: 40
+    label: "MangoHud"
+    description: "Overlay mit Bildrate, Temperaturen und Auslastung."
+    packages: [mangohud]
+    repos: [multilib]
+
+  # -- Entwicklung -----------------------------------------------------------
+  - id: git
+    group: dev
+    order: 10
+    label: "Git"
+    description: "Versionsverwaltung."
+    recommended: true
+    packages: [git]
+
+  - id: python
+    group: dev
+    order: 20
+    label: "Python"
+    description: "Python-Interpreter samt Paketverwaltung."
+    packages: [python, python-pip]
+
+  - id: nodejs
+    group: dev
+    order: 30
+    label: "Node.js"
+    description: "JavaScript-Laufzeit mit npm."
+    packages: [nodejs, npm]
+
+  - id: docker
+    group: dev
+    order: 40
+    label: "Docker"
+    description: >-
+      Container-Laufzeit. Der Dienst wird unter 'Dienste' aktiviert; Benutzer
+      brauchen zusaetzlich die Gruppe 'docker'.
+    packages: [docker, docker-compose]
+    provides: [container-runtime]
+
+  - id: toolchain
+    group: dev
+    order: 50
+    label: "C/C++-Toolchain"
+    description: "GCC, Make, CMake und die uebrigen Bauwerkzeuge (base-devel)."
+    packages: [base-devel, cmake, gdb]
+
+  - id: neovim
+    group: dev
+    order: 60
+    label: "Neovim"
+    description: "Modernisierter vim."
+    packages: [neovim]
+
+  - id: vscodium
+    group: dev
+    order: 70
+    label: "VSCodium"
+    description: "Telemetriefreier Build von Visual Studio Code."
+    packages: [code]
+
+  # -- Werkzeuge -------------------------------------------------------------
+  - id: btop
+    group: tools
+    order: 10
+    label: "btop"
+    description: "Uebersichtlicher Systemmonitor fuer das Terminal."
+    packages: [btop]
+
+  - id: fastfetch
+    group: tools
+    order: 20
+    label: "fastfetch"
+    description: >-
+      Zeigt Systeminformationen mit Logo. Liest /etc/os-release und damit
+      automatisch das eingestellte Branding.
+    recommended: true
+    packages: [fastfetch]
+
+  - id: htop
+    group: tools
+    order: 30
+    label: "htop"
+    packages: [htop]
+
+  - id: archive-tools
+    group: tools
+    order: 40
+    label: "Archivwerkzeuge"
+    description: "Entpackt zip, 7z, rar und Konsorten."
+    packages: [p7zip, unrar, unzip, zip]
+
+  - id: shell-tools
+    group: tools
+    order: 50
+    label: "Terminal-Grundausstattung"
+    description: "wget, curl, rsync, less, tree und man-Seiten."
+    packages: [wget, curl, rsync, less, tree, man-db, man-pages]

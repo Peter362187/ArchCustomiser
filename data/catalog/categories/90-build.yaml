@@ -1,0 +1,115 @@
+# =============================================================================
+# Wizard-Schritt 11: Build- und Live-Einstellungen
+#
+# Zwei Dinge stehen hier, die man leicht uebersieht und die spaeter teuer sind:
+#
+# 1. cow_spacesize. Der archiso-Standard ist 256 MB. Fuer eine reine
+#    Rettungskonsole reicht das; eine KDE-Live-Sitzung laeuft damit binnen
+#    Minuten voll. Vorgabe deshalb 2G.
+#
+# 2. Kompression. xz mit BCJ-Filter braucht auf einem KDE+Steam-Dateisystem
+#    leicht 20 bis 40 Minuten. Wer nur ausprobiert, will zstd.
+#
+# 3. Bootmodus. mkarchiso lehnt seit Version 89 die Kombination
+#    uefi.systemd-boot + uefi.grub ausdruecklich ab. Deshalb ist der UEFI-Modus
+#    hier eine Einfachauswahl und nicht zwei Haken.
+# =============================================================================
+
+schema_version: 1
+
+category:
+  id: build
+  title: "ISO-Einstellungen"
+  subtitle: "Bootmodi, Kompression und Verhalten der Live-Sitzung."
+  step: 90
+  page_type: form
+  icon: "disc"
+
+fields:
+
+  - id: bios_boot
+    label: "BIOS-Start unterstuetzen (syslinux)"
+    widget: bool
+    default: true
+    help: >-
+      Noetig fuer aeltere Rechner ohne UEFI. Fuegt das Paket 'syslinux' hinzu,
+      das mkarchiso dafuer zwingend in der Paketliste erwartet.
+
+  - id: uefi_boot
+    label: "UEFI-Bootloader"
+    widget: combo
+    default: "systemd-boot"
+    choices:
+      - { value: "systemd-boot", label: "systemd-boot (schlank, Textmenue)" }
+      - { value: "grub",         label: "GRUB (grafisches Menue, Themes moeglich)" }
+      - { value: "none",         label: "Kein UEFI-Start" }
+    help: >-
+      systemd-boot und GRUB schliessen sich gegenseitig aus -- mkarchiso bricht
+      ab, wenn beide gesetzt sind. Ein Hintergrundbild im UEFI-Menue kann nur
+      GRUB.
+
+  - id: compression
+    label: "Kompression"
+    widget: combo
+    default: "balanced"
+    choices:
+      - { value: "fast",     label: "Schnell (zstd) -- fuer Testlaeufe" }
+      - { value: "balanced", label: "Ausgewogen (zstd, hohe Stufe)" }
+      - { value: "max",      label: "Maximal (xz+BCJ) -- kleinste ISO, deutlich langsamer" }
+
+  - id: cow_spacesize
+    label: "Schreibspeicher der Live-Sitzung"
+    widget: combo
+    default: "2G"
+    choices:
+      - { value: "256M", label: "256 MB (archiso-Standard, nur fuer Textsysteme)" }
+      - { value: "1G",   label: "1 GB" }
+      - { value: "2G",   label: "2 GB (empfohlen fuer Desktop-Sitzungen)" }
+      - { value: "4G",   label: "4 GB" }
+    help: >-
+      Alles, was in der Live-Sitzung geschrieben wird, landet im
+      Arbeitsspeicher. Zu klein gewaehlt, laeuft eine Desktop-Sitzung voll.
+
+  - id: boot_timeout
+    label: "Wartezeit im Bootmenue (Sekunden)"
+    widget: int
+    default: 15
+    min: 0
+    max: 300
+
+  - id: include_installer
+    label: "Installationsprogramm mitliefern"
+    widget: bool
+    default: true
+    help: >-
+      archiso erzeugt ein Live-System, das nach dem Neustart spurlos weg ist.
+      Diese Option legt archinstall samt vorbereiteter Konfiguration bei und
+      erzeugt einen Starter auf dem Live-Desktop, damit das System dauerhaft
+      installiert werden kann.
+
+  - id: include_memtest
+    label: "Speichertest ins Bootmenue aufnehmen"
+    widget: bool
+    default: false
+
+  - id: output_dir
+    label: "Ausgabeverzeichnis"
+    widget: path
+    validator: writable_dir
+    placeholder: "Standard: ~/archcustomiser/out"
+    help: "Hier entsteht die fertige ISO-Datei."
+
+  - id: work_dir
+    label: "Arbeitsverzeichnis"
+    widget: path
+    validator: writable_dir
+    placeholder: "Standard: ~/archcustomiser/work"
+    help: >-
+      Braucht viel Platz -- fuer ein Desktop-Image mit Spielen realistisch 25
+      bis 40 GB -- und muss auf einem Linux-Dateisystem liegen.
+
+  - id: keep_work_dir
+    label: "Arbeitsverzeichnis nach dem Build behalten"
+    widget: bool
+    default: false
+    help: "Nuetzlich zur Fehlersuche, belegt aber weiterhin den Speicherplatz."
