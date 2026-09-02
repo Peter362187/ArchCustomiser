@@ -14,7 +14,7 @@ from __future__ import annotations
 import logging
 import shutil
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta, timezone
 from typing import Sequence
 
 from .aur import AurClient
@@ -29,8 +29,7 @@ from .backend import (
 )
 from .backend_pacman import PacmanSyncBackend, is_available as pacman_available, read_pacman_repos
 from .backend_remote import RemoteIndexBackend
-from .cache import PackageCache
-from .errors import BackendUnavailable, PackageLayerError, StaleDataError
+from .errors import PackageLayerError
 from .index import RepoIndex
 from .models import (
     BackendProblem,
@@ -40,7 +39,7 @@ from .models import (
     Resolution,
     ValidationReport,
 )
-from .validator import classify, validate_all
+from .validator import validate_all
 
 log = logging.getLogger(__name__)
 
@@ -75,10 +74,6 @@ class PackageService:
     @property
     def index(self) -> RepoIndex | None:
         return self._index
-
-    @property
-    def is_ready(self) -> bool:
-        return self._index is not None and not self._degraded
 
     @property
     def degraded(self) -> bool:
@@ -165,16 +160,6 @@ class PackageService:
             return report
         return self._augment_with_aur(report)
 
-    def validate_one(
-        self, name: str, *, provider_choices: dict[str, str] | None = None
-    ) -> Resolution:
-        return classify(
-            name,
-            self._index,
-            degraded=self._degraded,
-            provider_choices=provider_choices,
-        )
-
     def _augment_with_aur(self, report: ValidationReport) -> ValidationReport:
         """Nur fuer Namen, die offiziell nicht gefunden wurden.
 
@@ -225,20 +210,6 @@ class PackageService:
     def can_preview_dependencies(self) -> bool:
         return isinstance(self.backend, SupportsDependencyPreview) and shutil.which("pacman") is not None
 
-    def preview_dependencies(self, packages: Sequence[str]) -> DependencyPreview | None:
-        """Echte Aufloesung durch pacman -- oder ``None``, wo es die nicht gibt.
-
-        Bewusst kein Ersatz aus eigener Rechnung: eine erfundene Liste waere
-        schlimmer als gar keine, weil sie glaubwuerdig aussieht.
-        """
-        if not self.can_preview_dependencies():
-            return None
-        try:
-            return self.backend.preview_transaction(packages)  # type: ignore[attr-defined]
-        except PackageLayerError as exc:
-            log.info("Abhaengigkeitsvorschau nicht moeglich: %s", exc.technical)
-            return None
-
     # -- Frische --------------------------------------------------------------
     def age(self) -> timedelta | None:
         meta = self.metadata()
@@ -259,20 +230,7 @@ class PackageService:
             f"- {meta.package_count} Pakete aus {', '.join(meta.repo_names)}"
         )
 
-    def assert_fresh_enough(self, *, allow_override: bool = False) -> None:
-        """Vor dem Build: sind die Daten alt genug fuer eine Rueckfrage?"""
-        age = self.age()
-        if age is None or allow_override:
-            return
-        if age >= self.config.policy.block_after:
-            raise StaleDataError(age)
-
     # -- Wartung --------------------------------------------------------------
-    def clear_cache(self) -> int:
-        removed = PackageCache(arch=self.config.arch).clear()
-        self._index = None
-        self._degraded = True
-        return removed
 
 
 def _humanize(age: timedelta | None) -> str:

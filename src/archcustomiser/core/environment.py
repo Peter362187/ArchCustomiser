@@ -13,8 +13,12 @@ uebersehen werden:
   braucht der aufrufende Benutzer aber Eintraege in ``/etc/subuid`` und
   ``/etc/subgid`` -- fehlen die, scheitert der Build mit einer wenig
   aussagekraeftigen Meldung. Deshalb wird beides hier geprueft.
-* **grub ist auch dann ein Host-Werkzeug, wenn systemd-boot verwendet wird**
-  (fuer grubenv und loopback.cfg).
+* **grub-mkstandalone wird nur fuer den Bootmodus ``uefi.grub`` gebraucht.**
+  In mkarchiso ruft es ausschliesslich ``_make_bootmode_uefi.grub`` auf;
+  ``grubenv`` und ``loopback.cfg`` entstehen dagegen in
+  ``_make_common_grubenv_and_loopbackcfg`` per ``printf`` und ``sed``, also
+  ohne grub. Wer systemd-boot waehlt, braucht das Paket nicht -- deshalb steht
+  es nicht bei den unbedingt noetigen Werkzeugen.
 """
 
 from __future__ import annotations
@@ -23,7 +27,7 @@ import logging
 import os
 import shutil
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 log = logging.getLogger(__name__)
@@ -58,10 +62,6 @@ class Environment:
     def missing_required(self) -> tuple[Tool, ...]:
         return tuple(tool for tool in self.tools if tool.required and not tool.found)
 
-    @property
-    def missing_optional(self) -> tuple[Tool, ...]:
-        return tuple(tool for tool in self.tools if not tool.required and not tool.found)
-
     def install_hint(self) -> str:
         """Ein fertiger pacman-Befehl fuer alles, was fehlt."""
         packages = sorted({tool.package for tool in self.missing_required})
@@ -88,15 +88,24 @@ _REQUIRED_TOOLS: tuple[tuple[str, str, str], ...] = (
     ("mkfs.fat", "dosfstools", "Erzeugt die EFI-Systempartition"),
     ("mcopy", "mtools", "Befuellt die EFI-Partition ohne mount"),
     ("mmd", "mtools", "Legt Verzeichnisse in der EFI-Partition an"),
-    # Nur fuer den Bootmodus 'uefi.grub'. Bei systemd-boot wird grub NICHT
-    # gebraucht -- mkarchiso erzeugt grubenv und loopback.cfg dort mit printf
-    # und sed, ohne grub-mkstandalone aufzurufen.
-    ("grub-mkstandalone", "grub", "Nur noetig, wenn GRUB als UEFI-Bootloader gewaehlt ist"),
     ("gzip", "gzip", "Kompression"),
     ("bsdtar", "libarchive", "Archivverarbeitung"),
     ("awk", "awk", "Textverarbeitung in mkarchiso"),
     ("openssl", "openssl", "Pruefsummen und Passwort-Hashes"),
 )
+
+# Nur unter einer bestimmten Auswahl noetig. Sie hier als "required" zu
+# fuehren blockierte Builds, die einwandfrei durchgelaufen waeren: wer
+# systemd-boot gewaehlt hatte, wurde ohne Grund am Bauen gehindert, weil das
+# grub-Paket fehlte. Geprueft wird stattdessen in der Vorabpruefung, die die
+# Bootmodi kennt.
+CONDITIONAL_TOOLS: dict[str, tuple[str, str, str]] = {
+    "uefi.grub": (
+        "grub-mkstandalone",
+        "grub",
+        "Erzeugt das GRUB-Abbild fuer den UEFI-Start",
+    ),
+}
 
 _OPTIONAL_TOOLS: tuple[tuple[str, str, str], ...] = (
     ("mkfs.erofs", "erofs-utils", "Alternative zu SquashFS"),
@@ -158,6 +167,11 @@ def detect_environment() -> Environment:
     for name, package, purpose in _REQUIRED_TOOLS:
         tools.append(Tool(name, package, purpose, True, shutil.which(name)))
     for name, package, purpose in _OPTIONAL_TOOLS:
+        tools.append(Tool(name, package, purpose, False, shutil.which(name)))
+    # Bedingt noetige Werkzeuge werden mit erfasst -- sichtbar in --check-env,
+    # aber nicht blockierend. Ob sie gebraucht werden, weiss erst die
+    # Vorabpruefung.
+    for name, package, purpose in CONDITIONAL_TOOLS.values():
         tools.append(Tool(name, package, purpose, False, shutil.which(name)))
 
     problems: list[str] = []

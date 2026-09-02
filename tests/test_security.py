@@ -193,3 +193,159 @@ def test_predicates_cannot_execute_code() -> None:
     ):
         with pytest.raises(PredicateError):
             parse(evil)
+
+
+# ---------------------------------------------------------------------------
+# Befunde der Durchsicht vom 02.09.2026
+#
+# Jeder Test hier steht fuer eine Luecke, die tatsaechlich offen war und
+# experimentell reproduziert wurde -- nicht fuer eine theoretische Sorge.
+# ---------------------------------------------------------------------------
+
+
+def test_burning_a_secret_removes_it_from_the_log_filter() -> None:
+    """``burn()`` war wirkungslos, solange der Filter den Klartext behielt.
+
+    Der Puffer wurde genullt, aber die Kopie in der Literalliste lebte bis zum
+    Prozessende weiter -- also genau so lange, wie das Geheimnis nicht mehr
+    existieren sollte.
+    """
+    filter_ = SecretRedactionFilter()
+    from archcustomiser.core import secrets as secrets_module
+
+    secrets_module._observers.append((filter_.add_literal, filter_.discard_literal))
+    try:
+        secret = Secret("streng-geheim-1234")
+        assert "streng-geheim-1234" in filter_.known_literals()
+        secret.burn()
+        assert filter_.known_literals() == ()
+    finally:
+        secrets_module._observers.pop()
+
+
+def test_two_secrets_with_the_same_value_are_counted() -> None:
+    """Das Loeschen des einen darf den Schutz des anderen nicht aufheben."""
+    filter_ = SecretRedactionFilter()
+    from archcustomiser.core import secrets as secrets_module
+
+    secrets_module._observers.append((filter_.add_literal, filter_.discard_literal))
+    try:
+        erstes = Secret("doppelt-vergeben")
+        zweites = Secret("doppelt-vergeben")
+        erstes.burn()
+        assert "doppelt-vergeben" in filter_.known_literals(), "zu frueh vergessen"
+        zweites.burn()
+        assert filter_.known_literals() == ()
+    finally:
+        secrets_module._observers.pop()
+
+
+def test_the_store_leaves_nothing_behind_after_clear() -> None:
+    filter_ = SecretRedactionFilter()
+    from archcustomiser.core import secrets as secrets_module
+
+    secrets_module._observers.append((filter_.add_literal, filter_.discard_literal))
+    try:
+        store = SecretStore()
+        store.set("user.password", "archiso")
+        store.clear()
+        assert filter_.known_literals() == ()
+    finally:
+        secrets_module._observers.pop()
+
+
+def test_a_password_does_not_mangle_unrelated_words() -> None:
+    """Der zweite Schaden desselben Befundes.
+
+    Solange jeder Tastendruck ein eigenes ``Secret`` erzeugte, standen auch
+    alle Praefixe in der Liste. Aus der Logzeile "Installiere archiso" wurde
+    dann "Installiere ***hiso" -- das Bauprotokoll war unbrauchbar, sobald ein
+    Passwort mit einem haeufigen Wortanfang begann.
+    """
+    filter_ = SecretRedactionFilter()
+    filter_.add_literal("archiso")
+    ergebnis = filter_._scrub("Installiere archiso und arch-install-scripts")
+    assert "arch-install-scripts" in ergebnis, "ein fremdes Wort wurde zerlegt"
+    assert "archiso" not in ergebnis.replace("arch-install-scripts", "")
+
+
+def test_longer_literals_are_replaced_first() -> None:
+    """Sonst zerlegt ein kurzes Literal ein laengeres, bevor es drankommt."""
+    filter_ = SecretRedactionFilter()
+    filter_.add_literal("geheim")
+    filter_.add_literal("geheim-lang")
+    assert filter_._scrub("Wert: geheim-lang") == "Wert: ***"
+
+
+def test_saving_a_profile_never_writes_a_secret_field(tmp_path, catalog) -> None:
+    """Die Grenze hielt bisher nur beim Laden.
+
+    Passwoerter erreichen ``BuildConfig`` auf dem vorgesehenen Weg nie. Haengt
+    die Zusicherung aber allein daran, dass die Oberflaeche sich richtig
+    verhaelt, ist sie keine Zusicherung.
+    """
+    from archcustomiser.core.config import BuildConfig
+    from archcustomiser.core.profiles import ProfileService
+
+    config = BuildConfig(catalog_version=catalog.catalog_version)
+    config.set_field("user.name", "jason")
+    config.set_field("user.password", "hunter2-geheim")
+
+    ziel = tmp_path / "profil.yaml"
+    ProfileService(catalog).save(config, ziel)
+
+    inhalt = ziel.read_text(encoding="utf-8")
+    assert "hunter2-geheim" not in inhalt
+    assert "user.password" not in inhalt
+    assert "jason" in inhalt, "die harmlosen Felder muessen erhalten bleiben"
+
+
+def test_boot_menu_title_cannot_break_out_of_grub_config(catalog, resolver) -> None:
+    """GRUBs Konfiguration ist eine Skriptsprache, kein Datenformat.
+
+    ``menuentry "Titel" { ... }`` -- ein Anfuehrungszeichen im Titel schliesst
+    die Zeichenkette und laesst den Rest der Zeile als Befehle stehen. Das Feld
+    hatte weder Validator noch Laengenbegrenzung, und die Selbstpruefung des
+    Generators sah nur nach, ob die Datei existiert.
+    """
+    import dataclasses
+
+    from archcustomiser.core.archiso import bootloader, branding
+    from archcustomiser.core.archiso.settings import build_settings
+    from archcustomiser.core.archiso.tree import ProfileTree
+    from archcustomiser.core.config import BuildConfig
+
+    angriff = 'Boese" ; insmod evil ; menuentry "x'
+    config = BuildConfig(catalog_version=catalog.catalog_version)
+    for kategorie in catalog.categories:
+        if kategorie.default_selection:
+            config.set_selection(kategorie.id, kategorie.default_selection)
+    config.set_field("branding.boot_menu_title", angriff)
+
+    settings = build_settings(config, resolver.resolve(config))
+    settings = dataclasses.replace(settings, bootmodes=("bios.syslinux", "uefi.grub"))
+
+    tree = ProfileTree()
+    bootloader.build_bootloaders(tree, settings, branding.menu_title(config))
+
+    grub = tree.text("grub/grub.cfg")
+    assert grub.count('"') % 2 == 0, "die Anfuehrungszeichen sind nicht mehr paarig"
+    assert grub.count("{") == grub.count("}"), "die Klammern sind nicht mehr paarig"
+    assert "insmod evil" not in grub.replace("insmod evil menuentry", "")
+
+    # Und dieselbe Zusicherung fuer die beiden zeilenbasierten Formate.
+    for pfad in tree.paths():
+        if pfad.endswith((".cfg", ".conf")):
+            for zeile in tree.text(pfad).splitlines():
+                assert "\n" not in zeile
+
+
+def test_the_catalog_rejects_a_dangerous_menu_title() -> None:
+    """Zweite Linie: der Benutzer soll es erfahren, nicht stillschweigend
+    bereinigt bekommen."""
+    from archcustomiser.core import validation
+
+    assert validation.validate("menu_title", "Mein Linux 1.0").ok
+    assert not validation.validate("menu_title", 'Boese" ; x').ok
+    assert not validation.validate("menu_title", "a" * 70).ok
+    assert not validation.validate("menu_title", "Titel mit $HOME").ok

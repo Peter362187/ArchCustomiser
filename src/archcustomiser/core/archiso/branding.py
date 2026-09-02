@@ -18,7 +18,9 @@ import struct
 from pathlib import Path
 
 from ..config import BuildConfig
+from ..validation import MAX_MENU_TITLE_LENGTH, MENU_TITLE_FORBIDDEN
 from .errors import MissingAssetError
+from .quoting import shell_quote
 from .settings import ArchisoSettings
 from .tree import ProfileTree
 
@@ -45,11 +47,41 @@ def build_branding(
 
 
 def menu_title(config: BuildConfig) -> str:
-    """Der Titel fuer alle Bootmenues."""
+    """Der Titel fuer alle Bootmenues -- auf unbedenkliche Zeichen beschraenkt.
+
+    Der Wert geht in drei Formate mit drei Syntaxen: syslinux und systemd-boot
+    sind zeilenbasiert, GRUB wertet seine Konfiguration als Skript aus. Ein
+    Anfuehrungszeichen im Titel schliesst dort die Zeichenkette mitten im
+    ``menuentry`` und laesst den Rest der Zeile als Befehle zurueck.
+
+    Die Oberflaeche prueft das bereits ueber den Validator ``menu_title``. Diese
+    zweite Linie greift, wenn ein Profil an ihr vorbeikommt -- eine geladene
+    YAML-Datei etwa, die von einem anderen Rechner stammt. Dort wird nicht
+    abgelehnt, sondern bereinigt: ein Profil soll an einem Anzeigetext nicht
+    scheitern.
+    """
     explicit = config.field_str("branding.boot_menu_title")
-    if explicit:
-        return explicit
-    return f"{config.distro_name} {config.version}"
+    roh = explicit or f"{config.distro_name} {config.version}"
+    sicher = _clean_menu_title(roh)
+    if sicher != roh:
+        log.warning(
+            "Bootmenue-Titel enthielt Zeichen, die die Menuedatei zerlegt haetten, "
+            "und wurde bereinigt: %r -> %r",
+            roh,
+            sicher,
+        )
+    return sicher or "Linux"
+
+
+def _clean_menu_title(value: str) -> str:
+    ohne_sonderzeichen = "".join(
+        zeichen
+        for zeichen in value
+        if zeichen not in MENU_TITLE_FORBIDDEN
+        and zeichen >= " "
+        and zeichen != chr(127)
+    )
+    return " ".join(ohne_sonderzeichen.split())[:MAX_MENU_TITLE_LENGTH]
 
 
 # ---------------------------------------------------------------------------
@@ -62,28 +94,31 @@ def _os_release(tree: ProfileTree, config: BuildConfig) -> None:
     identifier = config.iso_name          # bereits kleingeschrieben und bereinigt
 
     fields: list[tuple[str, str]] = [
-        ("NAME", f'"{_escape(name)}"'),
-        ("PRETTY_NAME", f'"{_escape(name)} {_escape(config.version)} (based on Arch Linux)"'),
-        ("ID", identifier),
+        ("NAME", _os_release_value(name, "NAME")),
+        (
+            "PRETTY_NAME",
+            _os_release_value(f"{name} {config.version} (based on Arch Linux)", "PRETTY_NAME"),
+        ),
+        ("ID", _os_release_value(identifier, "ID")),
         # Der maschinenlesbare Herkunftsnachweis. Nicht verhandelbar.
         ("ID_LIKE", "arch"),
         ("BUILD_ID", "rolling"),
-        ("VERSION_ID", f'"{_escape(config.version)}"'),
+        ("VERSION_ID", _os_release_value(config.version, "VERSION_ID")),
         ("ANSI_COLOR", '"38;2;23;147;209"'),
     ]
 
     home = config.field_str("branding.home_url")
     if home:
-        fields.append(("HOME_URL", f'"{_escape(home)}"'))
+        fields.append(("HOME_URL", _os_release_value(home, "HOME_URL")))
     bug = config.field_str("branding.bug_url")
     if bug:
-        fields.append(("BUG_REPORT_URL", f'"{_escape(bug)}"'))
+        fields.append(("BUG_REPORT_URL", _os_release_value(bug, "BUG_REPORT_URL")))
     # Auf die Arch-Dokumentation zu verweisen ist korrekte Quellenangabe und
     # keine Behauptung einer Zugehoerigkeit.
     fields.append(("DOCUMENTATION_URL", '"https://wiki.archlinux.org/"'))
 
     if config.field_str("branding.logo"):
-        fields.append(("LOGO", f"{identifier}-logo"))
+        fields.append(("LOGO", _os_release_value(f"{identifier}-logo", "LOGO")))
 
     body = "\n".join(f"{key}={value}" for key, value in fields)
     tree.add_file(
@@ -96,11 +131,24 @@ def _os_release(tree: ProfileTree, config: BuildConfig) -> None:
     )
 
 
-def _escape(value: str) -> str:
-    """os-release ist shell-aehnlich; Anfuehrungszeichen muessen maskiert sein."""
-    return value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", " ")
+def _os_release_value(value: str, field: str) -> str:
+    """Ein os-release-Wert, sicher als Shell-Literal.
 
+    ``/etc/os-release`` ist kein Datenformat, sondern ein Shell-Fragment: die
+    uebliche Art es zu lesen ist ``. /etc/os-release`` -- dieses Projekt tut das
+    in ``core/build/wsl.py`` selbst. Ein Wert in doppelten Anfuehrungszeichen
+    wird dabei weiter ersetzt, ``NAME="Test$(whoami)"`` fuehrt also whoami aus.
 
+    Die frueher hier verwendete Maskierung fing Backslash und Anfuehrungszeichen
+    ab, aber weder ``$`` noch Backtick -- und war damit wirkungslos gegen genau
+    den Angriff, gegen den ``profiledef.sh`` seit jeher geschuetzt ist. Deshalb
+    jetzt dieselbe Grenze wie dort: einfache Anfuehrungszeichen ueber
+    ``shlex.quote``, die in Bash jede Ersetzung unterbinden.
+
+    ``os-release(5)`` erlaubt beide Anfuehrungszeichenarten ausdruecklich, und
+    systemds eigener Parser liest einfache genauso wie doppelte.
+    """
+    return shell_quote(value, field=field)
 def _motd(tree: ProfileTree, config: BuildConfig) -> None:
     name = config.distro_name
     lines = [

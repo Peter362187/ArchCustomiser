@@ -26,6 +26,8 @@ from PySide6.QtWidgets import (
 
 from ...core.build import PreflightReport
 from .. import theme
+from .common import brush
+from .step_sidebar import MARK_DONE, MARK_ERROR, MARK_WARNING
 
 
 class PreflightDialog(QDialog):
@@ -67,13 +69,19 @@ class PreflightDialog(QDialog):
         self.tree.setColumnWidth(0, 200)
         self.tree.setAlternatingRowColors(True)
         for check in report.checks:
-            symbol = "ok" if check.ok else ("Hinweis" if not check.fatal else "FEHLER")
+            # Dieselben Zeichen wie in der Schrittliste und im Baudialog.
+            # Die Anwendung sprach hier drei Sprachen fuer denselben Zustand:
+            # ausgeschriebene Woerter, Unicode-Haken und ein Kreuz.
+            symbol = (
+                MARK_DONE if check.ok
+                else (MARK_WARNING if not check.fatal else MARK_ERROR)
+            )
             item = QTreeWidgetItem([f"{symbol}  {check.name}", check.detail])
             colour = (
                 theme.success() if check.ok
                 else (theme.warning() if not check.fatal else theme.danger())
             )
-            item.setForeground(0, _brush(colour))
+            item.setForeground(0, brush(colour))
             item.setToolTip(1, check.detail)
             self.tree.addTopLevelItem(item)
         layout.addWidget(self.tree, 1)
@@ -84,7 +92,8 @@ class PreflightDialog(QDialog):
             f"Arbeitsverzeichnis."
         )
         note.setWordWrap(True)
-        note.setStyleSheet(f"color: {theme.muted()}; font-size: 11px;")
+        note.setFont(theme.small_font())
+        note.setStyleSheet(f"color: {theme.muted()};")
         layout.addWidget(note)
 
         self.keep_work = QCheckBox("Arbeitsverzeichnis nach dem Build behalten (zur Fehlersuche)")
@@ -113,8 +122,3 @@ class PreflightDialog(QDialog):
     def keep_work_dir(self) -> bool:
         return self.keep_work.isChecked()
 
-
-def _brush(colour: str):
-    from PySide6.QtGui import QBrush, QColor
-
-    return QBrush(QColor(colour))

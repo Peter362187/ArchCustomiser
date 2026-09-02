@@ -17,6 +17,7 @@ schema_version: 1
 category:
   id: kernel
   title: "Kernel"
+  icon: "kernel"
   subtitle: "Welche Kernel-Variante das System verwenden soll."
   step: 30
   page_type: selection

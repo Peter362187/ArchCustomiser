@@ -24,6 +24,30 @@ from ..core.secrets import SecretStore
 log = logging.getLogger(__name__)
 
 
+class StoreContext:
+    """Auswertungskontext fuer ``visible_when``/``enabled_when``.
+
+    Stand vorher dreimal im Code -- in ``pages/selection.py``,
+    ``pages/form.py`` und ``wizard.py`` --, jedes Mal Zeile fuer Zeile gleich
+    und jedes Mal unter einem anderen Namen. Er gehoert zum Store, weil er nur
+    aus ihm liest.
+    """
+
+    __slots__ = ("store",)
+
+    def __init__(self, store: "SelectionStore") -> None:
+        self.store = store
+
+    def is_selected(self, ref: str) -> bool:
+        return self.store.is_selected(ref)
+
+    def has_capability(self, name: str) -> bool:
+        return bool(self.store.resolution().capabilities.get(name))
+
+    def field_value(self, binding: str) -> Any:
+        return self.store.field(binding)
+
+
 class SelectionStore(QObject):
     """Haelt die Konfiguration und den daraus abgeleiteten Zustand."""
 
@@ -60,6 +84,10 @@ class SelectionStore(QObject):
             self._recompute()
         assert self._resolution is not None
         return self._resolution
+
+    def context(self) -> StoreContext:
+        """Der Auswertungskontext fuer Katalog-Praedikate."""
+        return StoreContext(self)
 
     def issues(self, category_id: str | None = None) -> tuple[Issue, ...]:
         resolution = self.resolution()

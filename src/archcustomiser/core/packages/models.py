@@ -32,10 +32,6 @@ class PackageInfo:
     compressed_size: int | None = None
     build_date: datetime | None = None
 
-    @property
-    def installed_size_mb(self) -> float:
-        return (self.installed_size or 0) / 1_048_576
-
 
 @dataclass(frozen=True, slots=True)
 class RepoMeta:
@@ -65,11 +61,6 @@ class IndexMetadata:
         aktualisiert wurden, nicht wann wir zuletzt nachgesehen haben.
         """
         stamps = [repo.last_modified for repo in self.repos if repo.last_modified]
-        return min(stamps) if stamps else None
-
-    @property
-    def checked_at(self) -> datetime | None:
-        stamps = [repo.fetched_at for repo in self.repos if repo.fetched_at]
         return min(stamps) if stamps else None
 
     @property
@@ -230,10 +221,6 @@ class ValidationReport:
         return tuple(entry for entry in self.entries if entry.kind.is_blocking)
 
     @property
-    def unverified(self) -> tuple[Resolution, ...]:
-        return tuple(entry for entry in self.entries if entry.kind is EntryKind.UNVERIFIED)
-
-    @property
     def ambiguous(self) -> tuple[Resolution, ...]:
         return tuple(entry for entry in self.entries if entry.kind is EntryKind.PROVIDES_AMBIG)
 
@@ -258,12 +245,6 @@ class ValidationReport:
         return tuple(
             entry.normalized for entry in self.entries if entry.kind is EntryKind.AUR
         )
-
-    def by_query(self, query: str) -> Resolution | None:
-        for entry in self.entries:
-            if entry.query == query:
-                return entry
-        return None
 
 
 @dataclass(frozen=True, slots=True)

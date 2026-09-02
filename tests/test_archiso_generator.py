@@ -447,18 +447,59 @@ def test_live_only_service_stays_out_of_the_installer_config(catalog, resolver) 
 def test_os_release_declares_arch_as_its_basis(catalog, resolver) -> None:
     profile = generate(catalog, resolver, make_config())
     text = profile.tree.text("airootfs/etc/os-release")
-    assert "ID_LIKE=arch" in text
-    assert "based on Arch Linux" in text
-    assert 'NAME="FLOS"' in text
+    werte = _read_os_release(text)
+    assert werte["ID_LIKE"] == "arch"
+    assert "based on Arch Linux" in werte["PRETTY_NAME"]
+    assert werte["NAME"] == "FLOS"
     # mkarchiso setzt diese beiden selbst; doppelte Pflege waere eine Fehlerquelle.
-    assert "IMAGE_ID=" not in text
-    assert "IMAGE_VERSION=" not in text
+    assert "IMAGE_ID" not in werte
+    assert "IMAGE_VERSION" not in werte
 
 
-def test_os_release_escapes_quotes(catalog, resolver) -> None:
-    profile = generate(catalog, resolver, make_config(branding__distro_name='FL"OS'))
-    line = _assignment(profile.tree.text("airootfs/etc/os-release"), "NAME")
-    assert line == 'NAME="FL\\"OS"'
+@pytest.mark.parametrize(
+    "name",
+    [
+        'FL"OS',
+        "FL'OS",
+        "FLOS$(whoami)",
+        "FLOS`id`",
+        "FLOS${HOME}",
+        r"FL\OS",
+        "FLOS && rm -rf /",
+    ],
+)
+def test_os_release_survives_shell_metacharacters(catalog, resolver, name: str) -> None:
+    """os-release wird per ``. /etc/os-release`` gelesen, also ausgefuehrt.
+
+    Geprueft wird nicht die Schreibweise, sondern das Ergebnis: was beim
+    Einlesen herauskommt, muss genau das sein, was eingegeben wurde -- kein
+    Kommando darf dabei zur Ausfuehrung kommen. Die frueher hier gepruefte
+    Maskierung fing nur Backslash und Anfuehrungszeichen ab und liess ``$``
+    und Backtick durch.
+    """
+    profile = generate(catalog, resolver, make_config(branding__distro_name=name))
+    werte = _read_os_release(profile.tree.text("airootfs/etc/os-release"))
+    assert werte["NAME"] == name
+    assert werte["PRETTY_NAME"].startswith(name)
+
+
+def _read_os_release(text: str) -> dict[str, str]:
+    """Liest os-release so, wie ein Shell-Parser es taete.
+
+    ``shlex`` im POSIX-Modus wendet dieselben Quoting-Regeln an wie Bash beim
+    ``.``-Einlesen -- ohne dabei etwas auszufuehren. Damit prueft der Test die
+    tatsaechliche Bedeutung der Datei und nicht ihre Formatierung.
+    """
+    import shlex
+
+    werte: dict[str, str] = {}
+    for zeile in text.splitlines():
+        if not zeile or zeile.startswith("#") or "=" not in zeile:
+            continue
+        name, _, roh = zeile.partition("=")
+        teile = shlex.split(roh, posix=True)
+        werte[name] = teile[0] if teile else ""
+    return werte
 
 
 def test_boot_menu_title_follows_the_branding(catalog, resolver) -> None:

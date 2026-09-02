@@ -135,12 +135,24 @@ def validate_password(value: Any) -> ValidationResult:
 _LOCALE = re.compile(r"^[a-z]{2,3}(_[A-Z]{2})?(\.[A-Za-z0-9-]+)?(@[A-Za-z0-9]+)?$")
 
 
+# Von glibc eingebaute Locales ohne Landesteil. ``C.UTF-8`` ist die, die
+# archiso selbst verwendet -- und der Vorgabewert in ``airootfs.py`` und
+# ``packages.py``. Der Validator lehnte sie ab: wer genau den Wert eintrug, den
+# das Programm ohne Eingabe annimmt, kam an dieser Stelle nicht weiter.
+BUILTIN_LOCALES = frozenset({"C", "C.UTF-8", "POSIX"})
+
+
 def validate_locale(value: Any) -> ValidationResult:
     text = str(value or "").strip()
     if not text:
         return _fail("Eine Locale wird benoetigt.")
+    if text in BUILTIN_LOCALES:
+        return OK
     if not _LOCALE.match(text):
-        return _fail("Format erwartet: sprache_LAND.KODIERUNG, z.B. de_DE.UTF-8")
+        return _fail(
+            "Format erwartet: sprache_LAND.KODIERUNG, z.B. de_DE.UTF-8 "
+            "(oder C.UTF-8 fuer ein System ohne Uebersetzung)"
+        )
     if "UTF-8" not in text.upper():
         return _warn("Nicht-UTF-8-Locales fuehren regelmaessig zu Darstellungsproblemen.")
     return OK
@@ -254,6 +266,58 @@ def validate_install_dir(value: Any) -> ValidationResult:
     return OK
 
 
+MAX_MENU_TITLE_LENGTH = 60
+
+# Zeichen, die in mindestens einem der drei Bootmenue-Formate die Struktur
+# zerlegen. GRUB ist der kritische Fall: seine Konfiguration ist eine echte
+# Skriptsprache, und ein Anfuehrungszeichen im Titel beendet dort die
+# Zeichenkette mitten im menuentry.
+MENU_TITLE_FORBIDDEN = frozenset((
+    '"',
+    "'",
+    '`',
+    '$',
+    '\\',
+    '{',
+    '}',
+    '(',
+    ')',
+    ';',
+    '#',
+))
+
+
+def validate_menu_title(value: Any) -> ValidationResult:
+    """Der Titel geht in drei Bootlader-Formate mit drei Syntaxen.
+
+    syslinux und systemd-boot sind zeilenbasiert -- ein Zeilenumbruch beginnt
+    dort eine neue Anweisung. GRUB dagegen wertet seine Konfiguration als
+    Skript aus: ``menuentry "Titel" { ... }``. Ein Anfuehrungszeichen im Titel
+    schliesst die Zeichenkette und laesst den Rest der Zeile als Befehle
+    zurueck.
+
+    Der Titel ist reiner Anzeigetext. Ihn auf unbedenkliche Zeichen zu
+    beschraenken kostet nichts und macht alle drei Formate gleichzeitig sicher.
+    """
+    text = str(value or "").strip()
+    if not text:
+        return OK  # wird aus Name und Version abgeleitet
+    if len(text) > MAX_MENU_TITLE_LENGTH:
+        return _fail(
+            f"Hoechstens {MAX_MENU_TITLE_LENGTH} Zeichen -- laengere Titel werden "
+            f"im Bootmenue abgeschnitten."
+        )
+    if "\n" in text or "\r" in text:
+        return _fail("Zeilenumbrueche sind nicht erlaubt.")
+    getroffen = sorted({zeichen for zeichen in text if zeichen in MENU_TITLE_FORBIDDEN})
+    if getroffen:
+        return _fail(
+            "Diese Zeichen zerlegen die Bootmenue-Datei und sind nicht erlaubt: "
+            + " ".join(getroffen)
+        )
+    return OK
+
+
 def validate_url(value: Any) -> ValidationResult:
     text = str(value or "").strip()
     if not text:
@@ -360,20 +424,13 @@ _REGISTRY: dict[str, Validator] = {
     "version_string": validate_version_string,
     "iso_label": validate_iso_label,
     "install_dir": validate_install_dir,
+    "menu_title": validate_menu_title,
     "url": validate_url,
     "existing_file": validate_existing_file,
     "image_file": validate_image_file,
     "splash_image": validate_splash_image,
     "writable_dir": validate_writable_dir,
 }
-
-
-def get_validator(name: str) -> Validator | None:
-    return _REGISTRY.get(name)
-
-
-def register_validator(name: str, validator: Validator) -> None:
-    _REGISTRY[name] = validator
 
 
 def validate(name: str, value: Any) -> ValidationResult:
@@ -387,7 +444,3 @@ def validate(name: str, value: Any) -> ValidationResult:
 
         logging.getLogger(__name__).exception("Validator %r ist fehlgeschlagen", name)
         return OK
-
-
-def available_validators() -> tuple[str, ...]:
-    return tuple(sorted(_REGISTRY))

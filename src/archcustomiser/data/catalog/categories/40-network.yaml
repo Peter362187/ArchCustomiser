@@ -20,6 +20,7 @@ schema_version: 1
 category:
   id: network
   title: "Netzwerk"
+  icon: "network"
   subtitle: "Wie das System seine Netzwerkverbindungen verwaltet."
   step: 40
   page_type: selection

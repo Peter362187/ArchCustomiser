@@ -14,6 +14,7 @@ schema_version: 1
 category:
   id: windowmanager
   title: "Window Manager"
+  icon: "window"
   subtitle: >-
     Minimalistische Fensterverwaltung ohne kompletten Desktop. Kann zusaetzlich
     zu einer Desktop-Umgebung installiert werden.

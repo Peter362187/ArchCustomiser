@@ -21,11 +21,17 @@ from typing import Any, Callable, Final
 _MASK: Final = "***"
 
 # Der Log-Filter registriert sich hier, um Kreisimporte zu vermeiden.
-_observers: list[Callable[[str], None]] = []
+# Zwei Rueckrufe, nicht einer: ein Geheimnis anzumelden ohne es je wieder
+# abmelden zu koennen machte ``burn()`` wirkungslos -- der Klartext lebte in
+# der Filterliste weiter, nachdem der Puffer laengst genullt war.
+_observers: list[tuple[Callable[[str], None], Callable[[str], None]]] = []
 
 
-def register_observer(callback: Callable[[str], None]) -> None:
-    _observers.append(callback)
+def register_observer(
+    on_add: Callable[[str], None],
+    on_remove: Callable[[str], None],
+) -> None:
+    _observers.append((on_add, on_remove))
 
 
 class Secret:
@@ -40,8 +46,8 @@ class Secret:
             raw = bytes(value)
         self._buffer = bytearray(raw)
         self._burned = False
-        for observer in _observers:
-            observer(raw.decode("utf-8", errors="replace"))
+        for on_add, _on_remove in _observers:
+            on_add(raw.decode("utf-8", errors="replace"))
 
     # -- kontrollierter Zugriff ------------------------------------------------
     def reveal(self) -> str:
@@ -50,17 +56,22 @@ class Secret:
             raise ValueError("Secret wurde bereits gelöscht")
         return self._buffer.decode("utf-8")
 
-    def reveal_bytes(self) -> bytes:
-        if self._burned:
-            raise ValueError("Secret wurde bereits gelöscht")
-        return bytes(self._buffer)
-
     def burn(self) -> None:
-        """Überschreibt den Puffer. Danach ist das Secret unbrauchbar."""
+        """Überschreibt den Puffer. Danach ist das Secret unbrauchbar.
+
+        Meldet den Wert zusätzlich bei den Beobachtern ab. Ohne diesen Schritt
+        überlebte der Klartext in der Literalliste des Log-Filters -- der Puffer
+        war genullt, die Kopie blieb für die gesamte Prozesslaufzeit liegen.
+        """
+        if self._burned:
+            return
+        klartext = self._buffer.decode("utf-8", errors="replace")
         for index in range(len(self._buffer)):
             self._buffer[index] = 0
         self._buffer.clear()
         self._burned = True
+        for _on_add, on_remove in _observers:
+            on_remove(klartext)
 
     # -- Preisgabe-Sperren -----------------------------------------------------
     def __repr__(self) -> str:

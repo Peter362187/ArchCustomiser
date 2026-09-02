@@ -15,6 +15,8 @@ import logging
 from PySide6.QtWidgets import QLabel, QVBoxLayout, QWizardPage
 
 from ...core.catalog import Category
+from ...core.resolver import Issue
+from .. import theme
 from ..store import SelectionStore
 from ..widgets.issue_banner import IssueBanner
 
@@ -34,8 +36,9 @@ class CatalogPageBase(QWizardPage):
             self.setSubTitle(category.subtitle)
 
         self._root = QVBoxLayout(self)
-        self._root.setSpacing(10)
+        self._root.setSpacing(theme.SPACE_SM)
 
+        self._local_issues: tuple[Issue, ...] = ()
         self.banner = IssueBanner()
         self.banner.fixRequested.connect(self.store.apply_fix)
         self._root.addWidget(self.banner)
@@ -62,9 +65,22 @@ class CatalogPageBase(QWizardPage):
     def sync_from_store(self) -> None:
         """Widgets an den Store angleichen."""
 
+    # -- eigene Meldungen der Seite -------------------------------------------
+    def set_local_issues(self, issues: tuple[Issue, ...]) -> None:
+        """Meldungen, die nur diese Seite kennt.
+
+        Feldfehler und ungueltige Paketnamen sperrten den Weiter-Knopf, ohne
+        dass an prominenter Stelle stand, warum: die Begruendung hing an der
+        betroffenen Zeile, und die lag im Formular womoeglich ausserhalb des
+        sichtbaren Ausschnitts. Ueber diesen Weg landen sie zusaetzlich oben in
+        der Hinweisleiste, wo der Weiter-Knopf auch ist.
+        """
+        self._local_issues = issues
+        self._refresh_issues()
+
     # -- intern ---------------------------------------------------------------
     def _refresh_issues(self) -> None:
-        issues = self.store.issues(self.category.id)
+        issues = self.store.issues(self.category.id) + self._local_issues
         self.banner.set_issues(issues)
         self.completeChanged.emit()
 
@@ -75,5 +91,5 @@ class CatalogPageBase(QWizardPage):
             f'<a href="{self.category.help_url}">Weitere Informationen im Arch-Wiki</a>'
         )
         link.setOpenExternalLinks(True)
-        link.setStyleSheet("font-size: 11px;")
+        link.setFont(theme.small_font())
         self._root.addWidget(link)

@@ -17,9 +17,10 @@ import shutil
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Sequence
 
-from ..environment import Environment, detect_environment
-from .errors import NotEnoughSpace, PreflightError
+from ..environment import CONDITIONAL_TOOLS, Environment, detect_environment
+from .errors import PreflightError
 
 log = logging.getLogger(__name__)
 
@@ -94,6 +95,7 @@ def run_preflight(
     out_dir: Path,
     *,
     installed_mb: int = 0,
+    bootmodes: Sequence[str] = (),
     environment: Environment | None = None,
 ) -> PreflightReport:
     """Sammelt alle Befunde, ohne beim ersten Problem abzubrechen.
@@ -132,6 +134,20 @@ def run_preflight(
             ),
         )
     )
+
+    # -- Werkzeuge, die nur unter bestimmter Auswahl noetig sind --------------
+    fehlend_bedingt = _missing_conditional_tools(env, bootmodes)
+    if fehlend_bedingt:
+        report.checks.append(
+            Check(
+                "Bootloader-Werkzeuge",
+                False,
+                "Fuer den gewaehlten Startmodus fehlt: "
+                + ", ".join(f"{name} (Paket {paket})" for name, paket in fehlend_bedingt)
+                + ". Nachinstallieren mit: sudo pacman -S --needed "
+                + " ".join(sorted({paket for _name, paket in fehlend_bedingt})),
+            )
+        )
 
     # -- Rechte ---------------------------------------------------------------
     if env.privilege_mode == "unavailable":
@@ -228,6 +244,28 @@ def run_preflight(
         len(report.warnings),
     )
     return report
+
+
+def _missing_conditional_tools(
+    env: Environment, bootmodes: Sequence[str]
+) -> list[tuple[str, str]]:
+    """Werkzeuge, die nur unter der getroffenen Auswahl gebraucht werden.
+
+    ``grub-mkstandalone`` stand frueher bei den unbedingt noetigen Werkzeugen.
+    Das blockierte Builds, die einwandfrei durchgelaufen waeren: mkarchiso ruft
+    es ausschliesslich fuer den Bootmodus ``uefi.grub`` auf, wer systemd-boot
+    gewaehlt hat braucht das Paket nie.
+    """
+    vorhanden = {tool.name for tool in env.tools if tool.found}
+    fehlend: list[tuple[str, str]] = []
+    for bootmode in bootmodes:
+        eintrag = CONDITIONAL_TOOLS.get(bootmode)
+        if eintrag is None:
+            continue
+        name, paket, _zweck = eintrag
+        if name not in vorhanden:
+            fehlend.append((name, paket))
+    return fehlend
 
 
 def _filesystem_of(path: Path) -> str:

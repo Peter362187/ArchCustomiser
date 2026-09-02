@@ -21,6 +21,7 @@ import logging
 from pathlib import Path
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QDialog,
     QFileDialog,
@@ -32,65 +33,26 @@ from PySide6.QtWidgets import (
 )
 
 from ..core.catalog import Catalog, Category
+from ..core.environment import Environment
 from ..core.paths import ensure_dir, user_profiles_dir
 from ..core.plan import plan_as_text
 from ..core.logging_setup import log_file_path
 from ..core.profiles import ProfileError, ProfileService
-from . import theme
 from .packages_worker import PackageController
 from .pages.base import CatalogPageBase
 from .pages.factory import PageFactory
 from .pages.summary import SummaryPage
+from .pages.welcome import WELCOME_STEP, WelcomePage
 from .profile_worker import ProfileExporter
 from .store import SelectionStore
 from .build_worker import BuildJob
 from .widgets.build_dialog import BuildDialog
 from .widgets.export_dialog import ErrorDialog, ExportResultDialog
 from .widgets.preflight_dialog import PreflightDialog
+from .widgets.step_sidebar import StepSidebar, StepState
 from .widgets.wsl_dialog import WslSetupDialog
 
 log = logging.getLogger(__name__)
-
-
-class StepSidebar(QWidget):
-    """Schrittliste am linken Rand, mit Fehlermarkierung."""
-
-    def __init__(self, categories: tuple[Category, ...], parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self._labels: dict[str, QLabel] = {}
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(14, 18, 14, 18)
-        layout.setSpacing(7)
-
-        title = QLabel("Schritte")
-        font = title.font()
-        font.setBold(True)
-        title.setFont(font)
-        layout.addWidget(title)
-
-        for category in categories:
-            label = QLabel(category.title)
-            label.setStyleSheet(f"color: {theme.subtle()};")
-            layout.addWidget(label)
-            self._labels[category.id] = label
-        layout.addStretch(1)
-        self.setFixedWidth(190)
-
-    def set_current(self, category_id: str) -> None:
-        for key, label in self._labels.items():
-            if key == category_id:
-                label.setStyleSheet("color: palette(text); font-weight: 600;")
-            elif "✕" not in label.text():
-                label.setStyleSheet(f"color: {theme.subtle()};")
-
-    def set_error(self, category_id: str, has_error: bool) -> None:
-        label = self._labels.get(category_id)
-        if label is None:
-            return
-        base = label.text().replace(" ✕", "")
-        label.setText(f"{base} ✕" if has_error else base)
-        if has_error:
-            label.setStyleSheet(f"color: {theme.danger()}; font-weight: 600;")
 
 
 class BuildWizard(QWizard):
@@ -102,6 +64,7 @@ class BuildWizard(QWizard):
         store: SelectionStore,
         controller: PackageController,
         profiles: ProfileService,
+        environment: Environment | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -119,13 +82,16 @@ class BuildWizard(QWizard):
         self.setOption(QWizard.WizardOption.HaveCustomButton1, True)
         self.setOption(QWizard.WizardOption.HaveCustomButton2, True)
         self.setOption(QWizard.WizardOption.HaveCustomButton3, True)
-        self.setButtonText(QWizard.WizardButton.CustomButton1, "Profil laden")
-        self.setButtonText(QWizard.WizardButton.CustomButton2, "Profil speichern")
-        self.setButtonText(QWizard.WizardButton.CustomButton3, "Profil exportieren")
-        self.setButtonText(QWizard.WizardButton.NextButton, "Weiter >")
-        self.setButtonText(QWizard.WizardButton.BackButton, "< Zurueck")
-        self.setButtonText(QWizard.WizardButton.CancelButton, "Beenden")
-        self.setButtonText(QWizard.WizardButton.FinishButton, "ISO erstellen")
+        # Mit "&"-Mnemonik: ohne sie ueberschreiben eigene Beschriftungen die
+        # Akzeleratoren, die Qt sonst selbst vergibt -- die drei Profil-Knoepfe
+        # waren dadurch ausschliesslich mit der Maus erreichbar.
+        self.setButtonText(QWizard.WizardButton.CustomButton1, "Profil &laden")
+        self.setButtonText(QWizard.WizardButton.CustomButton2, "Profil &speichern")
+        self.setButtonText(QWizard.WizardButton.CustomButton3, "Profil e&xportieren")
+        self.setButtonText(QWizard.WizardButton.NextButton, "&Weiter >")
+        self.setButtonText(QWizard.WizardButton.BackButton, "< &Zurueck")
+        self.setButtonText(QWizard.WizardButton.CancelButton, "&Beenden")
+        self.setButtonText(QWizard.WizardButton.FinishButton, "&ISO erstellen")
         self.setMinimumSize(1000, 720)
 
         self.customButtonClicked.connect(self._on_custom_button)
@@ -136,13 +102,57 @@ class BuildWizard(QWizard):
 
         self._pages: dict[str, CatalogPageBase] = {}
         self._order: list[Category] = []
+        self.welcome = WelcomePage(store, profiles, environment)
+        self.welcome.profileLoaded.connect(self._on_profile_loaded)
+        self.setPage(WELCOME_STEP, self.welcome)
         self._build_pages()
 
+        self._visited: set[str] = set()
+        self._saved_once = False
+        self._initial_fingerprint = self._fingerprint()
         self.sidebar = StepSidebar(tuple(self._order))
+        self.sidebar.stepClicked.connect(self._jump_to)
         self.setSideWidget(self.sidebar)
 
         self.currentIdChanged.connect(self._on_page_changed)
         self.store.issuesChanged.connect(self._refresh_sidebar)
+        # Diese beiden Signale gab es seit jeher, verbunden war keines: schlug
+        # das Laden der Paketdaten fehl, erfuhr man es nur als Randnotiz in der
+        # Fusszeile einer einzigen Seite.
+        self.controller.failed.connect(self._on_packages_failed)
+        self.controller.statusChanged.connect(self._on_package_status)
+        self._install_shortcuts()
+
+    def _on_packages_failed(self, message: str) -> None:
+        log.warning("Paketdaten nicht ladbar: %s", message)
+        self.sidebar.set_notice(
+            "Paketdaten nicht verfuegbar -- Paketnamen lassen sich nicht "
+            "pruefen. Der Bau funktioniert trotzdem."
+        )
+
+    def _on_package_status(self, text: str) -> None:
+        self.sidebar.set_notice(text if "nicht" in text.lower() else "")
+
+    def _install_shortcuts(self) -> None:
+        """Tastenkuerzel -- vorher gab es im ganzen Programm keinen einzigen."""
+        for folge, ziel in (
+            (QKeySequence.StandardKey.Open, self._load_profile),
+            (QKeySequence.StandardKey.Save, self._save_profile),
+            (QKeySequence.StandardKey.Find, self._focus_search),
+            (QKeySequence("Ctrl+Return"), self._advance),
+        ):
+            QShortcut(QKeySequence(folge), self, activated=ziel)
+
+    def _focus_search(self) -> None:
+        """Strg+F springt ins Suchfeld der aktuellen Seite, falls es eines gibt."""
+        suche = getattr(self.currentPage(), "search", None)
+        if suche is not None:
+            suche.edit.setFocus()
+            suche.edit.selectAll()
+
+    def _advance(self) -> None:
+        if self.button(QWizard.WizardButton.NextButton).isEnabled():
+            self.next()
 
     # -- Aufbau ---------------------------------------------------------------
     def _build_pages(self) -> None:
@@ -163,7 +173,7 @@ class BuildWizard(QWizard):
 
     def visible_after(self, category: Category) -> int:
         """Naechste Kategorie, deren Bedingung erfuellt ist."""
-        context = _WizardContext(self.store)
+        context = self.store.context()
         started = False
         for candidate in self._order:
             if candidate.id == category.id:
@@ -179,16 +189,78 @@ class BuildWizard(QWizard):
     def _on_page_changed(self, page_id: int) -> None:
         for category in self._order:
             if category.step == page_id:
-                self.sidebar.set_current(category.id)
+                self._visited.add(category.id)
                 break
         self._refresh_sidebar()
 
     def _refresh_sidebar(self) -> None:
+        """Zeichnet die Schrittliste aus dem tatsaechlichen Zustand.
+
+        Wichtig ist der Fall "uebersprungen": ``nextId()`` ueberspringt
+        Kategorien, deren ``visible_when`` nicht erfuellt ist -- die Liste zeigte
+        sie aber unveraendert an. Wer keinen Desktop gewaehlt hat, wartete so auf
+        die Seite "Grafiktreiber", die nie kommt.
+        """
+        context = self.store.context()
+        aktuell = self.currentId()
+        zustaende: dict[str, StepState] = {}
+        anklickbar: set[str] = set()
+
         for category in self._order:
-            has_error = any(
-                issue.blocking for issue in self.store.issues(category.id)
-            )
-            self.sidebar.set_error(category.id, has_error)
+            if category.step == aktuell:
+                zustaende[category.id] = StepState.CURRENT
+                anklickbar.add(category.id)
+                continue
+            if not category.visible_when.evaluate(context):
+                zustaende[category.id] = StepState.SKIPPED
+                continue
+            if any(issue.blocking for issue in self.store.issues(category.id)):
+                zustaende[category.id] = StepState.ERROR
+                anklickbar.add(category.id)
+                continue
+            if category.id in self._visited:
+                zustaende[category.id] = StepState.DONE
+                anklickbar.add(category.id)
+            else:
+                zustaende[category.id] = StepState.OPEN
+
+        self.sidebar.set_states(zustaende)
+        self.sidebar.set_clickable(anklickbar)
+
+    def _jump_to(self, category_id: str) -> None:
+        """Direkt zu einem Schritt springen.
+
+        ``QWizard`` fuehrt intern einen Seitenstapel; ein Sprung muss ihn
+        durchlaufen, sonst ist die Zurueck-Navigation danach falsch. Deshalb
+        Schritt fuer Schritt, nicht per setStartId.
+        """
+        ziel = next((c for c in self._order if c.id == category_id), None)
+        if ziel is None or ziel.step == self.currentId():
+            return
+
+        vorwaerts = ziel.step > self.currentId()
+        for _ in range(len(self._order) + 1):
+            if self.currentId() == ziel.step:
+                return
+            vorher = self.currentId()
+            if vorwaerts:
+                self.next()
+            else:
+                self.back()
+            if self.currentId() == vorher:
+                return          # es geht nicht weiter -- eine Seite blockiert
+
+    def _on_profile_loaded(self) -> None:
+        """Ein geladenes Profil ist vollstaendig -- das darf man auch sehen.
+
+        Alle Schritte gelten damit als besucht und sind in der Schrittliste
+        anklickbar. Wer nur eine Kleinigkeit aendern will, springt direkt
+        dorthin; wer gleich bauen will, springt zur Zusammenfassung. Frueher
+        rief das Laden ``restart()`` und warf auf Schritt 1 zurueck -- man musste
+        sich durch alles durchklicken, obwohl schon alles eingestellt war.
+        """
+        self._visited = {category.id for category in self._order}
+        self._refresh_sidebar()
 
     def _on_custom_button(self, which: int) -> None:
         if which == QWizard.WizardButton.CustomButton1:
@@ -232,7 +304,7 @@ class BuildWizard(QWizard):
                 "Profile enthalten keine Passwoerter. Bitte das Passwort im Schritt "
                 "'Benutzerkonto' neu eingeben.",
             )
-        self.restart()
+        self._on_profile_loaded()
 
     def _save_profile(self) -> None:
         ensure_dir(user_profiles_dir(), mode=0o755)
@@ -254,6 +326,7 @@ class BuildWizard(QWizard):
         except OSError as exc:
             QMessageBox.warning(self, "Speichern fehlgeschlagen", str(exc))
             return
+        self._saved_once = True
         QMessageBox.information(
             self,
             "Profil gespeichert",
@@ -343,6 +416,60 @@ class BuildWizard(QWizard):
         )
         dialog.exec()
 
+    # -- Beenden --------------------------------------------------------------
+    def reject(self) -> None:
+        """Rueckfrage statt kommentarlosem Verwerfen.
+
+        Escape und der Beenden-Knopf loeschten bisher wortlos die gesamte
+        Zusammenstellung -- nach zwanzig Minuten Arbeit. Der Baudialog fragt in
+        derselben Lage nach; der Wizard selbst tat es nicht.
+        """
+        if not self._has_unsaved_work():
+            super().reject()
+            return
+
+        antwort = QMessageBox.question(
+            self,
+            "ArchCustomiser beenden",
+            "Die Zusammenstellung ist noch nicht gespeichert."
+            + chr(10) + chr(10)
+            + "Als Profil speichern, um sie spaeter weiterzuverwenden?",
+            QMessageBox.StandardButton.Save
+            | QMessageBox.StandardButton.Discard
+            | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Save,
+        )
+        if antwort == QMessageBox.StandardButton.Cancel:
+            return
+        if antwort == QMessageBox.StandardButton.Save:
+            self._save_profile()
+            if not self._saved_once:
+                return          # Speichern abgebrochen -- also auch nicht beenden
+        super().reject()
+
+    def _has_unsaved_work(self) -> bool:
+        """Ob ueberhaupt etwas zu verlieren ist.
+
+        Wer das Programm nur oeffnet und gleich wieder schliesst, soll nicht
+        gefragt werden -- die Vorgabewerte allein zaehlen deshalb nicht.
+        """
+        if self._saved_once:
+            return False
+        # Gegen den Ausgangszustand vergleichen, nicht gegen "leer": der Store
+        # ist schon beim Start mit den Vorgaben des Katalogs gefuellt --
+        # Rechnername, Sprache, Tastatur, Zeitzone. Wer nur oeffnet und wieder
+        # schliesst, soll nicht gefragt werden.
+        return self._fingerprint() != self._initial_fingerprint
+
+    def _fingerprint(self) -> tuple:
+        config = self.store.config
+        return (
+            tuple(sorted(config.all_refs())),
+            tuple(sorted((k, repr(v)) for k, v in config.fields.items())),
+            tuple(config.extra_packages),
+            bool(self.store.secrets.keys()),
+        )
+
     # -- ISO bauen ------------------------------------------------------------
     def accept(self) -> None:
         """'ISO erstellen'.
@@ -369,15 +496,37 @@ class BuildWizard(QWizard):
         self._start_build(target)
 
     def _choose_wsl_target(self):
-        """Sucht eine Arch-Verteilung in WSL oder fuehrt zur Einrichtung."""
+        """Sucht eine Arch-Verteilung in WSL oder fuehrt zur Einrichtung.
+
+        Die Suche laeuft im Hintergrund: ``wsl.exe`` antwortet je nach Zustand
+        der Verteilung sofort oder erst nach einer Minute, weil es sie erst
+        starten muss. Frueher stand das Fenster solange still und wurde von
+        Windows als "keine Rueckmeldung" markiert.
+        """
         from ..core.build import wsl
         from ..core.build.targets import WslExecutionTarget
+        from .widgets.wait_dialog import run_with_wait
 
-        status = wsl.detect()
-        if status.usable:
-            preferred = status.preferred
-            assert preferred is not None
-            return WslExecutionTarget(wsl.WslTarget(preferred.name))
+        status, fehler = run_with_wait(
+            self._suche_arch_verteilung,
+            "Linux-Untersystem wird geprueft ...\n\n"
+            "Das kann einen Moment dauern, wenn die Verteilung erst "
+            "starten muss.",
+            parent=self,
+        )
+        if fehler is not None:
+            QMessageBox.warning(
+                self,
+                "Linux-Untersystem nicht erreichbar",
+                "Die Pruefung ist fehlgeschlagen:\n\n" + str(fehler),
+            )
+            return None
+        if status is None:
+            return None          # vom Benutzer abgebrochen
+
+        gefunden = status.find_arch(probe=_ist_arch)
+        if status.installed and gefunden is not None:
+            return WslExecutionTarget(wsl.WslTarget(gefunden.name))
 
         dialog = WslSetupDialog(status, self)
         if dialog.exec() != QDialog.DialogCode.Accepted:
@@ -389,6 +538,12 @@ class BuildWizard(QWizard):
         if not name:
             return None
         return WslExecutionTarget(wsl.WslTarget(name))
+
+    @staticmethod
+    def _suche_arch_verteilung():
+        from ..core.build import wsl
+
+        return wsl.detect()
 
     def _start_build(self, target) -> None:
         config = self.store.config
@@ -445,22 +600,6 @@ class BuildWizard(QWizard):
             self._export(as_archive=True)
 
 
-class _WizardContext:
-    __slots__ = ("store",)
-
-    def __init__(self, store: SelectionStore) -> None:
-        self.store = store
-
-    def is_selected(self, ref: str) -> bool:
-        return self.store.is_selected(ref)
-
-    def has_capability(self, name: str) -> bool:
-        return bool(self.store.resolution().capabilities.get(name))
-
-    def field_value(self, binding: str):
-        return self.store.field(binding)
-
-
 def _make_next_id(wizard: BuildWizard, category: Category):
     """Bindet ``nextId`` an die Sichtbarkeitsbedingungen des Katalogs."""
 
@@ -468,3 +607,19 @@ def _make_next_id(wizard: BuildWizard, category: Category):
         return wizard.visible_after(category)
 
     return next_id
+
+
+def _ist_arch(name: str) -> bool:
+    """Fragt eine Verteilung, ob sie Arch ist -- ueber /etc/os-release.
+
+    Wird nur befragt, wenn der Name nichts verraet. Eine Verteilung darf
+    beliebig heissen; wer seine Installation "meinlinux" nennt, wurde frueher
+    nie gefunden.
+    """
+    from ..core.build import wsl
+
+    try:
+        return wsl.WslTarget(name).is_arch()
+    except Exception:          # eine nicht startbare Verteilung ist kein Fehler
+        log.debug("Verteilung %r nicht befragbar", name, exc_info=True)
+        return False

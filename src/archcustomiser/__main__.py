@@ -8,6 +8,7 @@ Konfiguration ohne Bildschirm zu pruefen.
 from __future__ import annotations
 
 import argparse
+import logging
 import sys
 from pathlib import Path
 
@@ -68,11 +69,60 @@ def main(argv: list[str] | None = None) -> int:
         return _dry_run(Path(args.dry_run))
 
     if log_path:
+        # Unter pythonw.exe gibt es kein stdout -- print() ist dort wirkungslos.
+        # Der Pfad steht deshalb zusaetzlich im Protokoll selbst.
         print(f"Protokoll: {log_path}")
+
+    _install_crash_handler(log_path)
 
     from .gui.app import run
 
     return run(sys.argv)
+
+
+def _install_crash_handler(log_path: Path | None) -> None:
+    """Macht einen Absturz sichtbar, auch ohne Konsole.
+
+    Die Oberflaeche wird ueber ``pythonw.exe`` gestartet, damit kein schwarzes
+    Fenster danebensteht. Der Preis: es gibt weder stdout noch stderr. Ein
+    Fehler vor dem Start der Ereignisschleife -- ein fehlendes PySide6 etwa --
+    blieb dadurch vollstaendig unsichtbar: das Fenster blitzte auf, und nichts
+    geschah. Kein Hinweis, keine Meldung, kein Protokolleintrag.
+
+    Der Haken schreibt deshalb in jedem Fall ins Protokoll und versucht
+    zusaetzlich, ein Fenster zu zeigen. Schlaegt auch das fehl, bleibt
+    wenigstens die Datei.
+    """
+    logger = logging.getLogger("archcustomiser")
+
+    def behandeln(art, wert, spur) -> None:
+        if issubclass(art, KeyboardInterrupt):
+            sys.__excepthook__(art, wert, spur)
+            return
+
+        logger.critical("Unbehandelter Fehler", exc_info=(art, wert, spur))
+
+        text = (
+            "ArchCustomiser wurde durch einen unerwarteten Fehler beendet." + "\n\n"
+            + f"{art.__name__}: {wert}"
+        )
+        if log_path:
+            text += (
+                "\n\nEinzelheiten stehen im Protokoll:\n"
+                + str(log_path)
+            )
+
+        try:
+            from PySide6.QtWidgets import QApplication, QMessageBox
+
+            if QApplication.instance() is None:
+                QApplication([])
+            QMessageBox.critical(None, "ArchCustomiser", text)
+        except Exception:
+            # Qt ist womoeglich genau das, was gefehlt hat.
+            print(text, file=sys.stderr)
+
+    sys.excepthook = behandeln
 
 
 def _dry_run(profile_path: Path) -> int:

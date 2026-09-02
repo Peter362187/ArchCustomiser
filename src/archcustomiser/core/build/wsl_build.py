@@ -29,6 +29,7 @@ from pathlib import Path, PurePosixPath
 from ..archiso import TarSink
 from ..archiso.tree import ProfileTree
 from .wsl import WslError, WslTarget
+from ..archiso.quoting import shell_quote
 
 log = logging.getLogger(__name__)
 
@@ -92,8 +93,16 @@ def transfer_profile(
 
         linux_archive = target.to_linux_path(archive)
 
-        # Ein frueherer Lauf darf nicht durchschlagen.
-        target.run(["rm", "-rf", "--", str(paths.profile)])
+        # Ein frueherer Lauf darf nicht durchschlagen. Schlaegt das Loeschen
+        # fehl, packt tar in den alten Stand hinein und vermischt beide
+        # Profile -- das faellt erst beim Bauen auf, wenn ueberhaupt.
+        aufraeumen = target.run(["rm", "-rf", "--", str(paths.profile)])
+        if not aufraeumen.ok:
+            raise WslError(
+                f"Das Profilverzeichnis {paths.profile} liess sich in WSL nicht "
+                f"loeschen. Ein alter Stand wuerde sich mit dem neuen vermischen.",
+                aufraeumen.stderr.strip() or f"Rueckgabewert {aufraeumen.returncode}",
+            )
 
         result = target.run(
             ["tar", "xzf", linux_archive, "-C", str(paths.root)],
@@ -107,7 +116,7 @@ def transfer_profile(
 
         # Gegenprobe: sind die Verknuepfungen tatsaechlich angekommen?
         check = target.run(
-            ["sh", "-c", f"find {_quote(str(paths.profile))} -type l | wc -l"]
+            ["sh", "-c", f"find {shell_quote(str(paths.profile))} -type l | wc -l"]
         )
         count = check.stdout.strip()
         expected = tree.symlink_count
@@ -155,6 +164,3 @@ def cleanup(
         if not result.ok:
             log.warning("%s liess sich in WSL nicht loeschen: %s", path, result.stderr.strip())
 
-
-def _quote(value: str) -> str:
-    return "'" + value.replace("'", "'\\''") + "'"

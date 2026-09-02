@@ -128,12 +128,3 @@ def build_index(
 
 
 EMPTY_METADATA = IndexMetadata(backend="none", arch="x86_64", repos=())
-
-
-def empty_index() -> RepoIndex:
-    """Ein leerer Index -- fuer den Fall 'keine Daten verfuegbar'.
-
-    Wichtig: Der Aufrufer muss dann ``degraded=True`` setzen, sonst wuerde jeder
-    Name faelschlich als "existiert nicht" gemeldet.
-    """
-    return RepoIndex((), EMPTY_METADATA)

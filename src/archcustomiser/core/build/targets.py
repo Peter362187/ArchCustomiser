@@ -21,6 +21,7 @@ from pathlib import Path, PurePosixPath
 from typing import Mapping, Protocol, Sequence
 
 from .errors import MkarchisoMissing
+from ..archiso.quoting import shell_quote
 
 log = logging.getLogger(__name__)
 
@@ -210,7 +211,7 @@ class WslExecutionTarget:
                 return candidate
         # Sonst die neueste ISO im Ausgabeverzeichnis.
         result = self.wsl.run(
-            ["sh", "-c", f"ls -1t {_quote(out_dir)}/*.iso 2>/dev/null | head -n1"]
+            ["sh", "-c", f"ls -1t {shell_quote(out_dir)}/*.iso 2>/dev/null | head -n1"]
         )
         found = result.stdout.strip()
         return found or None
@@ -261,7 +262,3 @@ def _is_local_drive(path: str) -> bool:
         # Im Zweifel behalten -- ein zu voller PATH ist harmloser als ein leerer.
         return True
 
-
-def _quote(value: str) -> str:
-    """Einfache Anfuehrungszeichen fuer einen Wert in einem sh-Aufruf."""
-    return "'" + value.replace("'", "'\\''") + "'"

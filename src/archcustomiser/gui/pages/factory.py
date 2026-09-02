@@ -35,9 +35,6 @@ class PageFactory:
             PageType.SUMMARY: lambda c, s, p: SummaryPage(c, s, p),
         }
 
-    def register(self, page_type: PageType, builder: PageBuilder) -> None:
-        self._builders[page_type] = builder
-
     def create(self, category: Category) -> QWizardPage | None:
         builder = self._builders.get(category.page_type)
         if builder is None:

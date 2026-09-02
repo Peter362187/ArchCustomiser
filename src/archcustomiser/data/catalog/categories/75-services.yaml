@@ -19,6 +19,7 @@ schema_version: 1
 category:
   id: services
   title: "Dienste"
+  icon: "service"
   subtitle: "Systemdienste, die beim Start automatisch laufen sollen."
   step: 75
   page_type: selection

@@ -22,8 +22,9 @@ from __future__ import annotations
 
 import logging
 import shutil
-import tempfile
+import threading
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -31,15 +32,16 @@ from pathlib import Path
 from typing import Callable
 
 from ..archiso import DirectorySink, GeneratedProfile, ProfileGenerator
+from ..archiso.settings import derive_bootmodes
 from ..archiso.errors import ProfileError
 from ..catalog import Catalog
 from ..config import BuildConfig
 from ..resolver import Resolution
 from ..secrets import SecretStore
-from .errors import BuildCancelled, BuildError, BuildFailed, PreflightError
+from .errors import BuildCancelled, BuildError
 from .preflight import PreflightReport, run_preflight
 from .progress import ProgressState
-from .runner import BuildResult, MkarchisoRunner
+from .runner import MAX_KEPT_LINES, BuildResult, MkarchisoRunner
 from .targets import ExecutionTarget, LocalTarget, WslExecutionTarget
 
 log = logging.getLogger(__name__)
@@ -113,7 +115,12 @@ class BuildController:
         self._output_fetched = False
         self._runner: MkarchisoRunner | None = None
         self._cancelled = False
-        self._lines: list[str] = []
+        # Dieselbe Ueberlegung wie im Runner: zwischen "Runner bauen" und
+        # "Runner eintragen" darf kein Abbruch verlorengehen.
+        self._lock = threading.Lock()
+        # Nur das Ende wird behalten -- dort steht der Fehler. Vorher hielten
+        # Runner und Controller die vollstaendige Ausgabe parallel im Speicher.
+        self._lines: deque[str] = deque(maxlen=MAX_KEPT_LINES)
 
     # -- oeffentlich ----------------------------------------------------------
     def preflight(self, work_dir: Path, out_dir: Path) -> PreflightReport:
@@ -132,7 +139,12 @@ class BuildController:
                 installed_mb=self.resolution.estimated_size_mb,
             )
         return run_preflight(
-            work_dir, out_dir, installed_mb=self.resolution.estimated_size_mb
+            work_dir,
+            out_dir,
+            installed_mb=self.resolution.estimated_size_mb,
+            # Damit die Pruefung weiss, welche Bootlader-Werkzeuge ueberhaupt
+            # gebraucht werden -- grub-mkstandalone etwa nur bei uefi.grub.
+            bootmodes=derive_bootmodes(self.config),
         )
 
     def run(
@@ -150,6 +162,19 @@ class BuildController:
         started = time.monotonic()
         work_dir = Path(work_dir)
         out_dir = Path(out_dir)
+
+        # Reste des vorigen Laufs raeumen. Ohne das schrieb ein zweiter Lauf
+        # auf derselben Instanz die Ausgabe des ersten in sein Protokoll.
+        #
+        # ``_cancelled`` bleibt bewusst stehen: ein Abbruch gilt auch, wenn er
+        # vor ``run()`` kam -- die Oberflaeche nutzt genau das, um einen Build
+        # abzublasen, der noch nicht angelaufen ist. Wer nach einem Abbruch
+        # erneut bauen will, nimmt eine neue Instanz; die Oberflaeche tut das
+        # ohnehin je Build.
+        self._lines.clear()
+        self._output_fetched = False
+        with self._lock:
+            self._runner = None
 
         try:
             # 1 -- Vorabpruefung
@@ -186,7 +211,12 @@ class BuildController:
                 source_date_epoch=int(datetime.now(timezone.utc).timestamp()),
                 target=self.target,
             )
-            self._runner = runner
+            with self._lock:
+                # Nach dem Eintragen noch einmal pruefen: kam der Abbruch
+                # genau in diesem Fenster, sah cancel() den Runner noch nicht.
+                self._runner = runner
+            if self._cancelled:
+                runner.cancel()
             result = runner.run(
                 on_line=lambda line: self._record(line, on_line),
                 on_progress=lambda state: self._mkarchiso_progress(on_progress, state),
@@ -225,8 +255,10 @@ class BuildController:
 
     def cancel(self) -> None:
         self._cancelled = True
-        if self._runner is not None:
-            self._runner.cancel()
+        with self._lock:
+            runner = self._runner
+        if runner is not None:
+            runner.cancel()
 
     @property
     def cancelled(self) -> bool:

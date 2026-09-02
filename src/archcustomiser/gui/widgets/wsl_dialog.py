@@ -3,9 +3,14 @@
 Erscheint, wenn auf einem Windows-Rechner eine ISO gebaut werden soll. Zeigt in
 einfachen Worten, was fehlt, und liefert die noetigen Befehle zum Kopieren.
 
-Bewusst wird **nichts** von selbst installiert: ``wsl --install`` braucht
-Administratorrechte und einen Neustart des Rechners. Das ist eine Entscheidung
-des Benutzers, keine, die ein Programm im Hintergrund treffen sollte.
+``wsl --install`` fuehrt das Programm bewusst **nicht** selbst aus: der Befehl
+braucht Administratorrechte und einen Neustart des Rechners. Das ist eine
+Entscheidung des Benutzers, keine, die ein Programm nebenbei trifft.
+
+``pacman -Syu --needed archiso`` dagegen schon -- auf Wunsch und per Knopf. Es
+laeuft innerhalb der bereits eingerichteten Verteilung, braucht keine
+Windows-Rechte und keinen Neustart. Den Benutzer dafuer eine Zeile abtippen zu
+lassen waere Selbstzweck.
 """
 
 from __future__ import annotations
@@ -13,9 +18,9 @@ from __future__ import annotations
 import logging
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QComboBox,
+    QMessageBox,
     QDialog,
     QDialogButtonBox,
     QHBoxLayout,
@@ -28,8 +33,22 @@ from PySide6.QtWidgets import (
 
 from ...core.build import wsl
 from .. import theme
+from .common import copy_to_clipboard
 
 log = logging.getLogger(__name__)
+
+# pacman laedt bei einem frischen System einige hundert MB.
+INSTALL_TIMEOUT = 900.0
+
+
+def _entleeren(layout) -> None:
+    while layout.count():
+        eintrag = layout.takeAt(0)
+        widget = eintrag.widget()
+        if widget is not None:
+            widget.deleteLater()
+        elif eintrag.layout() is not None:
+            _entleeren(eintrag.layout())
 
 
 class WslSetupDialog(QDialog):
@@ -82,6 +101,18 @@ class WslSetupDialog(QDialog):
         self.accept_button = buttons.addButton(
             "Weiter", QDialogButtonBox.ButtonRole.AcceptRole
         )
+        # Ohne diesen Knopf musste der Benutzer den Dialog schliessen und
+        # "ISO erstellen" erneut druecken, nachdem er die Schritte erledigt
+        # hatte -- die Pruefung lief nur einmal, im Konstruktor.
+        self.recheck_button = buttons.addButton(
+            "Erneut pruefen", QDialogButtonBox.ButtonRole.ResetRole
+        )
+        self.recheck_button.clicked.connect(self._recheck)
+        self.install_button = buttons.addButton(
+            "archiso jetzt installieren", QDialogButtonBox.ButtonRole.ActionRole
+        )
+        self.install_button.clicked.connect(self._install_archiso)
+        self.install_button.hide()
         self.export_button = buttons.addButton(
             "Stattdessen Profil exportieren", QDialogButtonBox.ButtonRole.ActionRole
         )
@@ -95,6 +126,91 @@ class WslSetupDialog(QDialog):
         self._populate()
 
     # -- Inhalt ---------------------------------------------------------------
+    def _clear_steps(self) -> None:
+        """Leert die Schrittliste, damit _populate wiederholbar ist."""
+        while self._steps.count():
+            eintrag = self._steps.takeAt(0)
+            widget = eintrag.widget()
+            if widget is not None:
+                widget.deleteLater()
+            elif eintrag.layout() is not None:
+                _entleeren(eintrag.layout())
+
+    def _recheck(self) -> None:
+        """Noch einmal nachsehen, nachdem der Benutzer etwas erledigt hat."""
+        from .wait_dialog import run_with_wait
+
+        status, fehler = run_with_wait(
+            wsl.detect,
+            "Linux-Untersystem wird geprueft ...",
+            parent=self,
+        )
+        if fehler is not None:
+            QMessageBox.warning(
+                self, "Pruefung fehlgeschlagen", str(fehler)
+            )
+            return
+        if status is None:
+            return
+        self.status = status
+        self._clear_steps()
+        self.chooser.clear()
+        self.install_button.hide()
+        self.accept_button.setEnabled(True)
+        self._populate()
+
+    def _install_archiso(self) -> None:
+        """Installiert archiso in der gewaehlten Verteilung.
+
+        Laeuft als root *innerhalb* von WSL -- keine Windows-Adminrechte, kein
+        Neustart. Der Vorgang laedt einige hundert MB und dauert entsprechend,
+        deshalb der Wartedialog.
+        """
+        from .wait_dialog import run_with_wait
+
+        ziel = self._first_distribution()
+        if not ziel:
+            return
+
+        ergebnis, fehler = run_with_wait(
+            lambda: wsl.WslTarget(ziel).run(
+                ["pacman", "-Syu", "--needed", "--noconfirm", "archiso"],
+                as_root=True,
+                timeout=INSTALL_TIMEOUT,
+            ),
+            f"archiso wird in {ziel} installiert ...\n\n"
+            "Es werden einige hundert MB geladen; das dauert ein paar "
+            "Minuten.",
+            f"Es werden einige hundert MB geladen; das dauert ein paar Minuten.",
+            parent=self,
+            cancellable=False,
+        )
+        if fehler is not None:
+            QMessageBox.warning(self, "Installation fehlgeschlagen", str(fehler))
+            return
+        if ergebnis is None:
+            return
+        if not ergebnis.ok:
+            QMessageBox.warning(
+                self,
+                "Installation fehlgeschlagen",
+                "pacman meldet einen Fehler. Die Schritte lassen sich auch von "
+                "Hand ausfuehren -- der Befehl steht oben zum Kopieren bereit."
+                + ("\n\n" + ergebnis.stderr.strip()[:600]
+                   if ergebnis.stderr else ""),
+            )
+            return
+        self._recheck()
+
+    def _first_distribution(self) -> str:
+        """Die Verteilung, in der installiert werden soll."""
+        if self.chooser.count():
+            return str(self.chooser.currentData() or "")
+        arch = self.status.arch_distributions
+        if arch:
+            return arch[0].name
+        return self.status.distributions[0].name if self.status.distributions else ""
+
     def _populate(self) -> None:
         arch = self.status.arch_distributions
 
@@ -158,6 +274,12 @@ class WslSetupDialog(QDialog):
         self._set_chooser_visible(len(arch) > 1)
         self.accept_button.setText("ISO erstellen")
         self.accept_button.setDefault(True)
+        # Ob archiso darin schon liegt, weiss erst die Vorabpruefung -- dafuer
+        # muesste die Verteilung starten, was hier Sekunden kosten wuerde. Der
+        # Knopf steht deshalb bereit, statt danach zu fragen. Ein erneuter Lauf
+        # mit --needed ist ohnehin folgenlos, wenn das Paket schon da ist.
+        self.install_button.setText("archiso installieren oder aktualisieren")
+        self.install_button.show()
 
     def _add_step(self, number: int, title: str, text: str, command: str) -> None:
         heading = QLabel(f"<b>{f'{number}. ' if number else ''}{title}</b>")
@@ -174,8 +296,15 @@ class WslSetupDialog(QDialog):
             row = QHBoxLayout()
             field = QPlainTextEdit(command)
             field.setReadOnly(True)
-            field.setFont(QFont("Consolas", 10))
-            field.setFixedHeight(34)
+            field.setFont(theme.mono_font())
+            # Eine Zeile Monospace -- gemessen statt geraten: bei 125 %
+            # Schriftskalierung brach die feste Hoehe von 34 px um.
+            field.setMinimumHeight(
+                field.fontMetrics().lineSpacing() + theme.SPACE_LG
+            )
+            field.setMaximumHeight(
+                field.fontMetrics().lineSpacing() * 3 + theme.SPACE_LG
+            )
             row.addWidget(field, 1)
 
             copy = QPushButton("Kopieren")
@@ -205,6 +334,5 @@ class WslSetupDialog(QDialog):
         self.accept()
 
     def _copy(self, value: str) -> None:
-        from PySide6.QtWidgets import QApplication
 
-        QApplication.clipboard().setText(value)
+        copy_to_clipboard(value)

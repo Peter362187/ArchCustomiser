@@ -29,7 +29,7 @@ from dataclasses import dataclass, field
 from typing import Any, Iterable, Literal, Mapping
 
 from .catalog import Arity, Catalog, EnableIn, FileEntry, Option, SelectionMode, ServiceRef
-from .config import BuildConfig, SelectionSource
+from .config import BuildConfig
 
 log = logging.getLogger(__name__)
 

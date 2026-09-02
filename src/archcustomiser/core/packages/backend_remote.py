@@ -125,7 +125,17 @@ class RemoteIndexBackend:
         failures: list[BackendUnavailable] = []
 
         total = len(self.config.repos) or 1
-        with self.cache.lock():
+        with self.cache.lock() as sperre:
+            if not sperre.acquired:
+                # Ein anderer Prozess laedt gerade. Statt dieselben Dateien ein
+                # zweites Mal zu holen, wird mit dem vorhandenen Stand
+                # gearbeitet -- genau dafuer ist die Sperre da. Bisher wurde ihr
+                # Ergebnis nie ausgewertet und einfach mitgeladen.
+                log.info(
+                    "Paketdaten werden bereits von einem anderen Vorgang "
+                    "aktualisiert; der vorhandene Stand wird verwendet."
+                )
+                policy = RefreshPolicy.NEVER
             for position, repo in enumerate(self.config.repos):
                 if cancel is not None and cancel():
                     raise BackendUnavailable("Der Vorgang wurde abgebrochen.")
@@ -150,10 +160,15 @@ class RemoteIndexBackend:
                     continue
 
                 if entry.package_count != len(packages):
+                    # url ist die Herkunft, nicht der Ablageort. Hier stand
+                    # frueher entry.path -- damit ueberschrieb das Nachtragen
+                    # der Paketzahl die Mirror-Adresse in der Metadatei mit dem
+                    # oertlichen Cache-Pfad, und man sah spaeter nicht mehr,
+                    # woher die Daten stammten.
                     entry = self.cache.store(
                         repo,
                         data,
-                        url=str(entry.path),
+                        url=entry.url,
                         etag=entry.etag,
                         last_modified=entry.last_modified,
                         package_count=len(packages),

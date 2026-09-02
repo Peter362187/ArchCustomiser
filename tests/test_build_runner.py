@@ -86,8 +86,12 @@ def test_argv_does_not_use_remove_work_dir(dirs) -> None:
 
 def test_pkexec_wraps_the_call(dirs, monkeypatch) -> None:
     profile, work, out = dirs
+    # Dort ersetzen, wo es tatsaechlich aufgerufen wird. Frueher stand hier
+    # "...build.runner.shutil.which" -- der Runner importierte shutil zwar,
+    # benutzte es aber nie; der Test hing an einem zufaelligen Re-Export und
+    # waere beim Aufraeumen der Importe stillschweigend wirkungslos geworden.
     monkeypatch.setattr(
-        "archcustomiser.core.build.runner.shutil.which",
+        "archcustomiser.core.build.targets.shutil.which",
         lambda name: f"/usr/bin/{name}",
     )
     runner = MkarchisoRunner(profile, work, out, privilege_mode="pkexec")
@@ -203,7 +207,7 @@ def test_missing_executable_is_reported_clearly(dirs, monkeypatch) -> None:
     from archcustomiser.core.build.errors import MkarchisoMissing
 
     profile, work, out = dirs
-    monkeypatch.setattr("archcustomiser.core.build.runner.shutil.which", lambda _n: None)
+    monkeypatch.setattr("archcustomiser.core.build.targets.shutil.which", lambda _n: None)
     with pytest.raises(MkarchisoMissing):
         MkarchisoRunner(profile, work, out).build_argv()
 
@@ -238,3 +242,64 @@ def test_cancel_before_start_is_harmless(dirs) -> None:
     runner = make_runner(dirs)
     runner.cancel()
     assert runner.cancelled
+
+
+# ---------------------------------------------------------------------------
+# Abbruch -- Befunde der Durchsicht vom 02.09.2026
+# ---------------------------------------------------------------------------
+
+
+def test_cancel_before_the_start_prevents_the_process(dirs) -> None:
+    """Ein Abbruch vor dem Start liess den Build frueher trotzdem durchlaufen.
+
+    ``cancel()`` setzte nur das Ereignis; ``run()`` startete mkarchiso, las die
+    gesamte Ausgabe und warf erst ganz am Ende ``BuildCancelled``. Bei einem
+    echten Build sind das vierzig Minuten Rechenzeit fuer ein Ergebnis, das
+    verworfen wird.
+    """
+    runner = make_runner(dirs)
+    gestartet: list[str] = []
+    original = runner.build_argv
+
+    def aufzeichnen() -> list[str]:
+        gestartet.append("los")
+        return original()
+
+    runner.build_argv = aufzeichnen        # type: ignore[method-assign]
+
+    runner.cancel()
+    with pytest.raises(BuildCancelled):
+        runner.run(expected_iso="flos-1.0-x86_64.iso")
+
+    assert runner._process is None, "es blieb ein Prozess zurueck"
+
+
+def test_output_is_not_kept_without_limit(dirs) -> None:
+    """Kern und Oberflaeche hielten die vollstaendige Ausgabe parallel.
+
+    Die Oberflaeche kappt bei MAX_PENDING_LINES, der Kern kappte gar nicht.
+    Bei einem haengenden Werkzeug waechst das unbegrenzt.
+    """
+    from archcustomiser.core.build.runner import MAX_KEPT_LINES
+
+    runner = make_runner(dirs)
+    result = runner.run(expected_iso="flos-1.0-x86_64.iso")
+    assert len(result.lines) <= MAX_KEPT_LINES
+    assert isinstance(result.lines, list)
+
+
+def test_the_pipe_is_closed_even_when_a_callback_raises(dirs) -> None:
+    """Ein on_line-Rueckruf ist ein Qt-Signal und kann werfen.
+
+    Vorher blieb stdout dann offen und ``wait()`` wartete auf einen Prozess,
+    der seinerseits auf Platz in der vollen Pipe wartete.
+    """
+    runner = make_runner(dirs)
+
+    def platzt(_zeile: str) -> None:
+        raise RuntimeError("Rueckruf gescheitert")
+
+    with pytest.raises(RuntimeError):
+        runner.run(on_line=platzt, expected_iso="flos-1.0-x86_64.iso")
+
+    assert runner._process is None

@@ -21,7 +21,6 @@ import logging
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTime, QTimer
-from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QDialog,
     QHBoxLayout,
@@ -39,6 +38,8 @@ from PySide6.QtWidgets import (
 from ...core.build import BuildOutcome, Step
 from ...core.build.errors import BuildFailed, PreflightError
 from .. import theme
+from .common import brush, open_path
+from .step_sidebar import MARK_CURRENT, MARK_DONE, MARK_OPEN
 from ..build_worker import BuildJob
 
 log = logging.getLogger(__name__)
@@ -120,17 +121,17 @@ class BuildDialog(QDialog):
         body = QHBoxLayout()
 
         self.steps = QListWidget()
-        self.steps.setFixedWidth(230)
+        self.steps.setMinimumWidth(230)
         self.steps.setSelectionMode(QListWidget.SelectionMode.NoSelection)
         for step in Step:
-            item = QListWidgetItem(f"○  {STEP_LABELS[step]}")
+            item = QListWidgetItem(f"{MARK_OPEN}  {STEP_LABELS[step]}")
             item.setData(Qt.ItemDataRole.UserRole, step.value)
             self.steps.addItem(item)
         body.addWidget(self.steps)
 
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
-        self.log.setFont(QFont("Consolas", 9))
+        self.log.setFont(theme.mono_font())
         # Ohne Obergrenze waechst der Puffer bei einem langen Build unbegrenzt.
         self.log.setMaximumBlockCount(MAX_LOG_BLOCKS)
         self.log.setPlaceholderText("Die Ausgabe von mkarchiso erscheint hier.")
@@ -175,12 +176,12 @@ class BuildDialog(QDialog):
             item = self.steps.item(index)
             value = item.data(Qt.ItemDataRole.UserRole)
             if value == getattr(step, "value", step):
-                item.setText(f"→  {STEP_LABELS[Step(value)]}")
-                item.setForeground(_brush(theme.accent()))
+                item.setText(f"{MARK_CURRENT}  {STEP_LABELS[Step(value)]}")
+                item.setForeground(brush(theme.accent()))
                 marked = True
             elif not marked:
-                item.setText(f"✓  {STEP_LABELS[Step(value)]}")
-                item.setForeground(_brush(theme.success()))
+                item.setText(f"{MARK_DONE}  {STEP_LABELS[Step(value)]}")
+                item.setForeground(brush(theme.success()))
 
     def _on_progress(self, fraction: float, label: str, detail: str) -> None:
         self.bar.setValue(int(max(0.0, min(1.0, fraction)) * 1000))
@@ -203,8 +204,11 @@ class BuildDialog(QDialog):
         self._finish()
         for index in range(self.steps.count()):
             item = self.steps.item(index)
-            item.setText(f"✓  {STEP_LABELS[Step(item.data(Qt.ItemDataRole.UserRole))]}")
-            item.setForeground(_brush(theme.success()))
+            item.setText(
+                f"{MARK_DONE}  "
+                f"{STEP_LABELS[Step(item.data(Qt.ItemDataRole.UserRole))]}"
+            )
+            item.setForeground(brush(theme.success()))
 
         self.bar.setValue(1000)
         size_bytes = (
@@ -310,14 +314,6 @@ class BuildDialog(QDialog):
         self._on_cancel_clicked()
 
 
-def _brush(colour: str):
-    from PySide6.QtGui import QBrush, QColor
-
-    return QBrush(QColor(colour))
-
 
 def _open(path: Path) -> None:
-    from PySide6.QtCore import QUrl
-    from PySide6.QtGui import QDesktopServices
-
-    QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+    open_path(path)

@@ -39,7 +39,7 @@ Vier Seitentypen, alles andere YAML. Die Spezifikation verlangt das für
 Paketlisten ausdrücklich; hier gilt es für **alle** Schritte, auch Textfelder
 und Passwortfelder.
 
-Praktische Folge: Die Datei `data/catalog/categories/65-drivers.yaml` wurde
+Praktische Folge: Die Datei `src/archcustomiser/data/catalog/categories/65-drivers.yaml` wurde
 angelegt, *nachdem* die Oberfläche fertig war, und erschien allein durch ihre
 Existenz als vollwertiger Wizard-Schritt — inklusive Sichtbarkeitsbedingung,
 kernelabhängiger Paketauswahl und Beitrag zur Installationskonfiguration.
@@ -233,7 +233,7 @@ ist.
 
 ## Tests
 
-188 Tests, ohne Netzwerk und ohne Bildschirm.
+438 Tests, ohne Netzwerk und ohne Bildschirm.
 
 * **`build_fake_syncdb()`** erzeugt echte `tar.gz`-Archive im ALPM-Format, keine
   Attrappen. So fällt eine Formatänderung bei pacman auf.
@@ -290,7 +290,7 @@ Tippfehler in der Originalquelle — nur auf das Präfix matchen.
 Beispiel: ein zusätzlicher Browser.
 
 ```yaml
-# data/catalog/categories/60-apps.yaml, unter options:
+# src/archcustomiser/data/catalog/categories/60-apps.yaml, unter options:
   - id: librewolf
     group: browser
     order: 15

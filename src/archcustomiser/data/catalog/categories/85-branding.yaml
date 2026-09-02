@@ -114,3 +114,8 @@ fields:
     label: "Titel im Bootmenue"
     widget: line
     placeholder: "wird aus Name und Version abgeleitet"
+    validator: menu_title
+    help: >
+      Erscheint im Startmenue. Der Titel geht in drei Bootlader-Formate mit
+      drei verschiedenen Syntaxen; Sonderzeichen wie Anfuehrungszeichen oder
+      Klammern wuerden die erzeugte Datei zerlegen und sind deshalb gesperrt.

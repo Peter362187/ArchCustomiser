@@ -17,6 +17,7 @@ Drei Zustaende, die sich sichtbar unterscheiden muessen:
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QFontMetrics
 from PySide6.QtWidgets import (
     QAbstractButton,
     QCheckBox,
@@ -38,15 +39,16 @@ class Badge(QLabel):
 
     def __init__(self, text: str, tone: str = "neutral", parent: QWidget | None = None) -> None:
         super().__init__(text, parent)
-        palette = {
-            "accent": ("#1793d1", "#ffffff"),
-            "warn": ("#c98a00", "#ffffff"),
-            "neutral": ("#5a5a5a", "#ffffff"),
-        }
-        background, foreground = palette.get(tone, palette["neutral"])
+        # Die Palette lag frueher hier fest verdrahtet und war die einzige
+        # Stelle der Anwendung, die den Dunkelmodus ignorierte -- weisse Schrift
+        # auf hellem Orange erfuellte ausserdem kein AA-Kontrastverhaeltnis.
+        background, foreground = theme.badge_colours(tone)
+        font = theme.small_font()
+        font.setBold(True)
+        self.setFont(font)
         self.setStyleSheet(
-            f"background:{background}; color:{foreground}; border-radius:7px;"
-            f"padding:1px 7px; font-size:10px; font-weight:600;"
+            f"background: {background}; color: {foreground}; border-radius: 7px;"
+            f" padding: 1px {theme.SPACE_SM}px;"
         )
         self.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
 
@@ -96,22 +98,42 @@ class OptionWidget(QFrame):
         header.addWidget(self.lock_label)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 8, 10, 8)
-        layout.setSpacing(3)
+        layout.setContentsMargins(
+            theme.SPACE_MD, theme.SPACE_SM, theme.SPACE_MD, theme.SPACE_SM
+        )
+        layout.setSpacing(theme.SPACE_XS)
         layout.addLayout(header)
 
         if option.description:
             self.description = QLabel(option.description)
             self.description.setWordWrap(True)
-            self.description.setStyleSheet(f"color: {theme.muted()}; font-size: 11px;")
+            self.description.setFont(theme.small_font())
+            self.description.setStyleSheet(f"color: {theme.muted()};")
             self.description.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
             layout.addWidget(self.description)
 
         self.note = QLabel("")
         self.note.setWordWrap(True)
-        self.note.setStyleSheet(f"color: {theme.danger()}; font-size: 11px;")
+        self.note.setFont(theme.small_font())
+        self.note.setStyleSheet(f"color: {theme.danger()};")
         self.note.hide()
         layout.addWidget(self.note)
+
+        # Alle Karten gleich hoch. Ohne das entsteht im Raster ein sichtbares
+        # Zickzack, weil manche Optionen eine einzeilige Beschreibung haben,
+        # andere eine zweizeilige und wieder andere gar keine.
+        self.setMinimumHeight(self._uniform_height())
+
+    @staticmethod
+    def _uniform_height() -> int:
+        """Platz fuer die Titelzeile plus zwei Zeilen Beschreibung.
+
+        Gemessen statt geraten, damit die Hoehe der Schriftskalierung des
+        Systems folgt.
+        """
+        titel = QFontMetrics(theme.headline_font(2)).lineSpacing()
+        klein = QFontMetrics(theme.small_font()).lineSpacing()
+        return titel + 2 * klein + theme.SPACE_SM * 2 + theme.SPACE_XS * 2
 
     # -- Zustand --------------------------------------------------------------
     def set_checked(self, checked: bool) -> None:
@@ -155,10 +177,6 @@ class OptionWidget(QFrame):
             self.note.show()
         else:
             self.note.hide()
-
-    def set_note(self, text: str) -> None:
-        self.note.setText(text)
-        self.note.setVisible(bool(text))
 
     def _on_toggled(self, checked: bool) -> None:
         self.toggled.emit(self.option.id, checked)

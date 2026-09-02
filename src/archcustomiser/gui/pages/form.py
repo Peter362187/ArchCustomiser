@@ -34,8 +34,10 @@ from PySide6.QtWidgets import (
 from ...core import choices as choice_registry
 from ...core import validation
 from ...core.catalog import Category, FieldSpec
+from ...core.resolver import Issue
 from .. import theme
 from ..store import SelectionStore
+from ..widgets.common import HintLabel
 from .base import CatalogPageBase
 
 log = logging.getLogger(__name__)
@@ -65,22 +67,6 @@ class _FieldRow:
         self.browse = browse
 
 
-class _PredicateContext:
-    __slots__ = ("store",)
-
-    def __init__(self, store: SelectionStore) -> None:
-        self.store = store
-
-    def is_selected(self, ref: str) -> bool:
-        return self.store.is_selected(ref)
-
-    def has_capability(self, name: str) -> bool:
-        return bool(self.store.resolution().capabilities.get(name))
-
-    def field_value(self, binding: str) -> Any:
-        return self.store.field(binding)
-
-
 class CatalogFormPage(CatalogPageBase):
     def __init__(self, category: Category, store: SelectionStore) -> None:
         super().__init__(category, store)
@@ -91,6 +77,8 @@ class CatalogFormPage(CatalogPageBase):
         self._timer.setInterval(VALIDATION_DELAY_MS)
         self._timer.timeout.connect(self._validate_all)
         self._build_ui()
+        self._add_required_legend()
+        self.add_help_link()
         self.store.fieldChanged.connect(lambda _binding: self._update_visibility())
 
     # -- Aufbau ---------------------------------------------------------------
@@ -105,7 +93,7 @@ class CatalogFormPage(CatalogPageBase):
             widget, browse = self._make_widget(spec)
             message = QLabel("")
             message.setWordWrap(True)
-            message.setStyleSheet("font-size: 11px;")
+            message.setFont(theme.small_font())
             message.hide()
 
             cell = QWidget()
@@ -125,11 +113,14 @@ class CatalogFormPage(CatalogPageBase):
             if spec.help:
                 hint = QLabel(spec.help)
                 hint.setWordWrap(True)
-                hint.setStyleSheet(f"color: {theme.muted()}; font-size: 11px;")
+                hint.setFont(theme.small_font())
+                hint.setStyleSheet(f"color: {theme.muted()};")
                 cell_layout.addWidget(hint)
             cell_layout.addWidget(message)
 
             label = QLabel(spec.label + (" *" if spec.required else ""))
+            if spec.required:
+                label.setToolTip("Pflichtfeld")
             form.addRow(label, cell)
             self._rows[spec.id] = _FieldRow(spec, widget, message, label, cell, browse)
 
@@ -177,7 +168,10 @@ class CatalogFormPage(CatalogPageBase):
         if spec.widget == "textarea":
             area = QTextEdit()
             area.setAcceptRichText(False)
-            area.setFixedHeight(80)
+            # Mindest- statt Festhoehe: bei groesserer Systemschrift
+            # schnitt die feste Hoehe den Text ab.
+            area.setMinimumHeight(80)
+            area.setMaximumHeight(200)
             area.textChanged.connect(
                 lambda s=spec, a=area: self._on_changed(s, a.toPlainText())
             )
@@ -186,9 +180,26 @@ class CatalogFormPage(CatalogPageBase):
         edit = QLineEdit()
         if spec.placeholder:
             edit.setPlaceholderText(spec.placeholder)
-        if spec.widget == "password":
+        if spec.secret:
             edit.setEchoMode(QLineEdit.EchoMode.Password)
-        edit.textEdited.connect(lambda text, s=spec: self._on_changed(s, text))
+            # Bei geheimen Feldern bewusst NICHT je Tastendruck: jeder
+            # Zwischenstand erzeugte ein eigenes ``Secret`` und meldete sich beim
+            # Log-Filter an. Ein Passwort "archiso" hinterliess so die Literale
+            # "arc", "arch", "archi", "archis" -- und jedes davon wurde fortan in
+            # jeder Logzeile ersetzt, auch mitten im Wort. Aus "Installiere
+            # archiso" wurde "Installiere ***".
+            #
+            # editingFinished feuert beim Verlassen des Feldes und bei Eingabe,
+            # also einmal je vollstaendigem Wert. Die Live-Pruefung des Formulars
+            # laeuft weiter ueber textEdited, nur ohne den Wert zu speichern.
+            edit.editingFinished.connect(
+                lambda s=spec, e=edit: self._on_changed(s, e.text())
+            )
+            edit.textEdited.connect(lambda _text: self._timer.start())
+        else:
+            if spec.widget == "password":
+                edit.setEchoMode(QLineEdit.EchoMode.Password)
+            edit.textEdited.connect(lambda text, s=spec: self._on_changed(s, text))
 
         browse = None
         if spec.widget == "path":
@@ -241,7 +252,7 @@ class CatalogFormPage(CatalogPageBase):
         self._validate_all()
 
     def _update_visibility(self) -> None:
-        context = _PredicateContext(self.store)
+        context = self.store.context()
         for row in self._rows.values():
             visible = row.spec.visible_when.evaluate(context)
             enabled = visible and row.spec.enabled_when.evaluate(context)
@@ -249,8 +260,18 @@ class CatalogFormPage(CatalogPageBase):
             row.label.setVisible(visible)
             row.container.setEnabled(enabled)
 
+    def _add_required_legend(self) -> None:
+        """Erklaeren, was der Stern bedeutet.
+
+        Er stand bisher an den Beschriftungen, ohne dass irgendwo erklaert war,
+        wofuer -- ein Zeichen, das nur weiss, wer es schon kennt.
+        """
+        if not any(spec.required for spec in self.category.fields):
+            return
+        self._root.addWidget(HintLabel("* Pflichtfeld"))
+
     def _validate_all(self) -> None:
-        context = _PredicateContext(self.store)
+        context = self.store.context()
         for row in self._rows.values():
             spec = row.spec
             active = spec.visible_when.evaluate(context) and spec.enabled_when.evaluate(context)
@@ -272,15 +293,23 @@ class CatalogFormPage(CatalogPageBase):
                 continue
 
             if spec.confirm_field:
-                other = self.store.secrets.get(
-                    self._binding_of(spec.confirm_field)
-                ) if spec.secret else None
-                first = text or ""
-                second = other.reveal() if other is not None else ""
-                if first and first != second:
-                    self._show(row, "Die beiden Eingaben stimmen nicht ueberein.", ok=False)
+                # Bei einem NICHT geheimen Feld war ``other`` frueher per
+                # Konstruktion None und ``second`` damit leer -- jede nichtleere
+                # Eingabe meldete dauerhaft "stimmen nicht ueberein". Heute
+                # ungenutzt, aber eine Falle fuer den naechsten Katalogeintrag.
+                zweitwert = self._value_of(spec.confirm_field, secret=spec.secret)
+                first = str(text or "")
+                if first and first != zweitwert:
+                    ziel = self._rows.get(spec.confirm_field, row)
+                    self._show(
+                        ziel, "Die beiden Eingaben stimmen nicht ueberein.", ok=False
+                    )
                     self._valid[spec.id] = False
                     continue
+                # Stimmen sie ueberein, muss die Meldung am Wiederholungsfeld
+                # auch wieder verschwinden.
+                if spec.confirm_field in self._rows:
+                    self._rows[spec.confirm_field].message.hide()
 
             if spec.validator:
                 result = validation.validate(spec.validator, text)
@@ -291,7 +320,75 @@ class CatalogFormPage(CatalogPageBase):
 
             row.message.hide()
             self._valid[spec.id] = True
+
+        self._publish_field_errors()
         self.completeChanged.emit()
+
+    def _hashing_warning(self) -> Issue | None:
+        """Warnen, wenn sich ein Passwort hier gar nicht setzen laesst.
+
+        ``hashing_available()`` gibt es seit jeher, aufgerufen hat es niemand --
+        obwohl sein Docstring genau diesen Fall beschreibt. Ohne eine Moeglichkeit
+        zu hashen wird das Konto gesperrt angelegt; das Feld anzubieten und
+        stillschweigend nichts damit zu tun waere die schlechteste Auskunft.
+
+        Das Feld bleibt trotzdem stehen: es auszublenden wuerde die Frage
+        aufwerfen, warum es fehlt.
+        """
+        if not any(spec.secret for spec in self.category.fields):
+            return None
+        from ...core.archiso.users import hashing_available
+
+        if hashing_available():
+            return None
+        return Issue(
+            severity="warning",
+            code="hashing_unavailable",
+            category_id=self.category.id,
+            message=(
+                "Auf diesem Rechner laesst sich kein Passwort-Hash erzeugen. "
+                "Das Konto wird gesperrt angelegt und das Passwort spaeter im "
+                "laufenden System mit 'passwd' gesetzt."
+            ),
+        )
+
+    def _publish_field_errors(self) -> None:
+        """Die Feldfehler zusaetzlich nach oben geben.
+
+        Ist der Weiter-Knopf gesperrt, weil ein Pflichtfeld weiter oben leer
+        ist, sah man die Begruendung im Scrollbereich womoeglich gar nicht.
+        """
+        meldungen = []
+        for spec_id, gueltig in self._valid.items():
+            if gueltig:
+                continue
+            row = self._rows.get(spec_id)
+            if row is None:
+                continue
+            meldungen.append(
+                Issue(
+                    severity="error",
+                    code="field_invalid",
+                    category_id=self.category.id,
+                    message=f"{row.spec.label}: {row.message.text()}",
+                )
+            )
+        hinweis = self._hashing_warning()
+        if hinweis is not None:
+            meldungen.append(hinweis)
+        self.set_local_issues(tuple(meldungen))
+
+    def _value_of(self, field_id: str, *, secret: bool) -> str:
+        """Der Wert eines anderen Feldes -- aus dem passenden Speicher.
+
+        Geheime Felder liegen im ``SecretStore``, alle anderen in der
+        Konfiguration. Vorher wurde nur der erste Fall bedacht.
+        """
+        binding = self._binding_of(field_id)
+        if secret:
+            wert = self.store.secrets.get(binding)
+            return wert.reveal() if wert is not None else ""
+        return str(self.store.field(binding) or "")
 
     def _binding_of(self, field_id: str) -> str:
         spec = self.category.field(field_id)
@@ -301,7 +398,8 @@ class CatalogFormPage(CatalogPageBase):
     def _show(row: _FieldRow, message: str, *, ok: bool) -> None:
         colour = theme.warning() if ok else theme.danger()
         row.message.setText(message)
-        row.message.setStyleSheet(f"color:{colour}; font-size:11px;")
+        row.message.setFont(theme.small_font())
+        row.message.setStyleSheet(f"color: {colour};")
         row.message.show()
 
     def isComplete(self) -> bool:

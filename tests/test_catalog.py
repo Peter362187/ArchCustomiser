@@ -176,17 +176,18 @@ def test_duplicate_step_is_refused(tmp_path) -> None:
     assert "step=1" in str(info.value)
 
 
-def test_file_entry_needs_exactly_one_source(tmp_path) -> None:
+def test_file_entry_without_content_is_refused(tmp_path) -> None:
+    """Frueher gab es hier zusaetzlich ``source``.
+
+    Das Feld wurde geparst und validiert, aber nie ausgewertet: der Eintrag
+    erzeugte still keine Datei und trug trotzdem einen Rechte-Eintrag fuer
+    einen Pfad ein, den es im Abbild nicht gab. Jetzt ist ``content`` der
+    einzige Weg -- und sein Fehlen ein Fehler statt eines Nichts.
+    """
     write_catalog(
         tmp_path,
         {"id": "a", "title": "A", "step": 1},
-        [
-            {
-                "id": "x",
-                "label": "X",
-                "files": [{"target": "/etc/x", "source": "a", "content": "b"}],
-            }
-        ],
+        [{"id": "x", "label": "X", "files": [{"target": "/etc/x"}]}],
     )
     with pytest.raises(CatalogError):
         load_catalog(tmp_path, include_user_overlays=False)

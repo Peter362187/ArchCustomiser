@@ -122,22 +122,31 @@ class ServiceRef:
 
 @dataclass(frozen=True, slots=True)
 class FileEntry:
-    """Eine Datei im airootfs-Overlay -- als Quelle oder als Inline-Inhalt."""
+    """Eine Datei im airootfs-Overlay, mit ihrem Inhalt im Katalog.
+
+    Frueher gab es hier zusaetzlich ``source`` (Datei danebenlegen statt
+    einbetten) und ``template``. Beide wurden geparst und validiert, aber von
+    ``core/archiso/airootfs.py`` nie ausgewertet: ein Katalogeintrag mit
+    ``source:`` erzeugte still **keine** Datei -- trug aber trotzdem einen
+    Rechte-Eintrag fuer einen Pfad ein, den es im Abbild nicht gab.
+
+    Ein Feld, das aussieht als taete es etwas und nichts tut, ist schlimmer als
+    keines. Beide sind deshalb entfernt; kein Katalog hat sie je benutzt. Wenn
+    ``source`` einmal gebraucht wird, gehoert dazu die Aufloesung relativ zum
+    jeweiligen Katalogverzeichnis samt Ausbruchspruefung -- das ist eine eigene
+    Aufgabe, kein Nebenher.
+    """
 
     target: str
-    source: str = ""
     content: str = ""
     mode: str = "0644"
     owner: str = ""               # "uid:gid", leer = root:root
-    template: bool = False
     when: Predicate = ALWAYS
     owned_by: str = ""
 
     def __post_init__(self) -> None:
-        if bool(self.source) == bool(self.content):
-            raise ValueError(
-                f"FileEntry {self.target!r}: genau eines von 'source' oder 'content' angeben"
-            )
+        if not self.content:
+            raise ValueError(f"FileEntry {self.target!r}: 'content' fehlt")
 
 
 @dataclass(frozen=True, slots=True)
@@ -289,10 +298,6 @@ class Category:
                 return spec
         return None
 
-    @property
-    def is_exclusive(self) -> bool:
-        return self.selection_mode in (SelectionMode.SINGLE, SelectionMode.SINGLE_OPTIONAL)
-
 
 @dataclass(frozen=True, slots=True)
 class CapabilitySpec:
@@ -340,9 +345,6 @@ class Catalog:
         if ref in self._by_ref:
             return ref
         return self._by_alias.get(ref)
-
-    def providers_of(self, capability: str) -> tuple[str, ...]:
-        return self._providers.get(capability, ())
 
     def visible_categories(self) -> tuple[Category, ...]:
         return tuple(c for c in self.categories if c.visible)

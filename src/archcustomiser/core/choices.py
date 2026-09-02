@@ -152,7 +152,3 @@ def get_choices(name: str) -> tuple[str, ...]:
     except Exception:
         log.exception("Auswahlliste %r konnte nicht geladen werden", name)
         return ()
-
-
-def register_choices(name: str, provider: Callable[[], tuple[str, ...]]) -> None:
-    _REGISTRY[name] = provider

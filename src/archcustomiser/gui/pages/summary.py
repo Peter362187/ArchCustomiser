@@ -15,7 +15,6 @@ from __future__ import annotations
 import json
 import logging
 
-from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -35,6 +34,7 @@ from ...core.plan import BuildPlan, build_plan, plan_as_text
 from .. import theme
 from ..packages_worker import PackageController
 from ..store import SelectionStore
+from ..widgets.common import brush, copy_to_clipboard
 from .base import CatalogPageBase
 
 log = logging.getLogger(__name__)
@@ -51,6 +51,7 @@ class SummaryPage(CatalogPageBase):
         self.controller = controller
         self._plan: BuildPlan | None = None
         self._profile: GeneratedProfile | None = None
+        self._profile_error = ""
         self._build_ui()
         # Nach dieser Seite beginnt der Build -- Qt blendet den Zurueck-Knopf
         # dann aus. Das ist gewollt: eine halb gestartete ISO-Erzeugung laesst
@@ -76,12 +77,12 @@ class SummaryPage(CatalogPageBase):
 
         self.symlinks = QPlainTextEdit()
         self.symlinks.setReadOnly(True)
-        self.symlinks.setFont(QFont("Consolas", 9))
+        self.symlinks.setFont(theme.mono_font())
         self.tabs.addTab(self.symlinks, "systemd-Verknuepfungen")
 
         self.archinstall = QPlainTextEdit()
         self.archinstall.setReadOnly(True)
-        self.archinstall.setFont(QFont("Consolas", 9))
+        self.archinstall.setFont(theme.mono_font())
         self.tabs.addTab(self.archinstall, "Installationskonfiguration")
 
         # Zeigt den erzeugten Profilbaum, bevor eine einzige Datei entsteht.
@@ -138,7 +139,7 @@ class SummaryPage(CatalogPageBase):
                 parent.addChild(child)
             for detail in section.detail:
                 child = QTreeWidgetItem(["", detail])
-                child.setForeground(1, _brush(theme.muted()))
+                child.setForeground(1, brush(theme.muted()))
                 parent.addChild(child)
             self.tree.addTopLevelItem(parent)
             parent.setExpanded(len(section.lines) <= 12)
@@ -191,6 +192,7 @@ class SummaryPage(CatalogPageBase):
 
         self.files.clear()
         self._profile = None
+        self._profile_error = ""
 
         resolution = self.store.resolution()
         if not resolution.is_valid:
@@ -204,7 +206,15 @@ class SummaryPage(CatalogPageBase):
                 self.store.catalog, self.store.config, resolution, self.store.secrets
             ).generate()
         except ProfileError as exc:
+            # Frueher landete die Meldung nur als Zeile in dieser Tabelle --
+            # ohne Banner, ohne Protokolleintrag, und "ISO erstellen" blieb
+            # anklickbar. Der Benutzer startete dann einen Bau, der gar nicht
+            # anlaufen konnte.
+            log.warning("Profil nicht erzeugbar: %s", exc.technical or exc.user_message)
+            self._profile_error = exc.user_message
             self.files.addTopLevelItem(QTreeWidgetItem([exc.user_message, "", "", ""]))
+            self._show_profile_error()
+            self.completeChanged.emit()
             return
 
         self._profile = profile
@@ -213,11 +223,14 @@ class SummaryPage(CatalogPageBase):
             if link is not None:
                 item = QTreeWidgetItem([path, "Verknuepfung", "", link.origin])
                 item.setToolTip(0, f"zeigt auf {link.target}")
-                item.setForeground(1, _brush(theme.accent()))
+                item.setForeground(1, brush(theme.accent()))
             else:
                 entry = profile.tree.files[path]
                 item = QTreeWidgetItem(
-                    [path, "Datei", f"{entry.size} B", entry.origin]
+                    # theme.format_size() gibt es dafuer; hier standen die
+                    # Groessen als rohe Bytezahl, was bei 3 MB unlesbar wird.
+                    [path, "Datei", theme.format_size(entry.size) or f"{entry.size} B",
+                     entry.origin]
                 )
             self.files.addTopLevelItem(item)
 
@@ -230,16 +243,35 @@ class SummaryPage(CatalogPageBase):
     def _copy(self) -> None:
         if self._plan is None:
             return
-        from PySide6.QtWidgets import QApplication
-
-        QApplication.clipboard().setText(plan_as_text(self._plan))
-        self.copy_button.setText("Kopiert")
+        # Der gemeinsame Helfer setzt die Beschriftung nach kurzer Zeit zurueck.
+        # Vorher blieb sie dauerhaft auf "Kopiert" stehen -- wer ein zweites Mal
+        # kopierte, sah nicht, ob der Klick ankam.
+        copy_to_clipboard(plan_as_text(self._plan), self.copy_button)
 
     def isComplete(self) -> bool:
-        return self._plan is not None and self._plan.resolution.is_valid
+        return (
+            self._plan is not None
+            and self._plan.resolution.is_valid
+            and not self._profile_error
+        )
+
+    def _show_profile_error(self) -> None:
+        """Die Meldung dorthin bringen, wo der Benutzer hinsieht."""
+        from ...core.resolver import Issue
+
+        self.banner.set_issues(
+            (
+                Issue(
+                    severity="error",
+                    code="profile_not_generatable",
+                    category_id=self.category.id,
+                    message=(
+                        "Das archiso-Profil laesst sich mit dieser Auswahl nicht "
+                        f"erzeugen: {self._profile_error}"
+                    ),
+                ),
+            )
+        )
 
 
-def _brush(colour: str):
-    from PySide6.QtGui import QBrush, QColor
 
-    return QBrush(QColor(colour))

@@ -11,8 +11,10 @@ Wichtig: gefiltert werden ``record.msg`` *und* ``record.args``, sonst rutscht
 from __future__ import annotations
 
 import logging
+import os
 import logging.handlers
 import re
+from collections import Counter
 from pathlib import Path
 
 from . import secrets
@@ -26,20 +28,47 @@ LOG_FILENAME = "archcustomiser.log"
 _HASH_RE = re.compile(r"\$(?:y|gy|7|6|5|2[aby]?|1)\$[^\s\"']{4,}")
 
 
+MIN_LITERAL_LENGTH = 3
+
+
 class SecretRedactionFilter(logging.Filter):
-    """Ersetzt bekannte Geheimnisse in jedem Log-Record."""
+    """Ersetzt bekannte Geheimnisse in jedem Log-Record.
+
+    Gezaehlt statt gesammelt: mehrere ``Secret``-Objekte koennen denselben Wert
+    tragen, und das Loeschen des einen darf den Schutz des anderen nicht
+    aufheben. Erst wenn der letzte Traeger verbrannt ist, verschwindet das
+    Literal aus der Liste.
+
+    Die Zaehlung ist zugleich der Grund, warum ``Secret.burn()` ueberhaupt etwas
+    bewirkt: vorher wanderte jeder Klartext hier hinein und blieb bis zum
+    Prozessende liegen.
+    """
 
     def __init__(self) -> None:
         super().__init__()
-        self._literals: set[str] = set()
+        self._literals: Counter[str] = Counter()
 
     def add_literal(self, value: str) -> None:
         # Sehr kurze Werte würden zu viele False Positives maskieren.
-        if value and len(value) >= 3:
-            self._literals.add(value)
+        if value and len(value) >= MIN_LITERAL_LENGTH:
+            self._literals[value] += 1
+
+    def discard_literal(self, value: str) -> None:
+        """Gegenstueck zu ``add_literal`` -- aufgerufen von ``Secret.burn()``."""
+        if not value or value not in self._literals:
+            return
+        self._literals[value] -= 1
+        if self._literals[value] <= 0:
+            del self._literals[value]
+
+    def known_literals(self) -> tuple[str, ...]:
+        """Nur fuer Tests: welche Werte gerade maskiert wuerden."""
+        return tuple(self._literals)
 
     def _scrub(self, text: str) -> str:
-        for literal in self._literals:
+        # Laengste zuerst: sonst zerlegt ein kurzes Literal ein langes, bevor
+        # dieses ueberhaupt geprueft wird.
+        for literal in sorted(self._literals, key=len, reverse=True):
             if literal in text:
                 text = text.replace(literal, MASK)
         return _HASH_RE.sub(MASK, text)
@@ -62,7 +91,7 @@ class SecretRedactionFilter(logging.Filter):
 
 
 _filter = SecretRedactionFilter()
-secrets.register_observer(_filter.add_literal)
+secrets.register_observer(_filter.add_literal, _filter.discard_literal)
 
 
 def redaction_filter() -> SecretRedactionFilter:
@@ -157,6 +186,12 @@ def write_build_log(iso_name: str, sections: dict[str, str]) -> Path | None:
             if not candidate.exists():
                 path = candidate
                 break
+        else:
+            # Alle Ausweichnamen belegt -- hundert Laeufe in derselben Sekunde.
+            # Sehr unwahrscheinlich, aber der frueher hier fehlende else-Zweig
+            # liess ``path`` auf dem Originalnamen stehen und ueberschrieb damit
+            # genau das Protokoll, das die Schleife retten sollte.
+            path = directory / f"{stamp}-{safe_name}-{os.getpid()}.log"
 
     lines = [f"ArchCustomiser -- Erzeugungslauf {stamp}", "=" * 60, ""]
     for title, body in sections.items():

@@ -165,8 +165,29 @@ def wizard(qapp, catalog, store):
 
 
 def test_every_visible_category_becomes_a_page(wizard, catalog) -> None:
+    from archcustomiser.gui.pages.welcome import WELCOME_STEP
+
     expected = {category.step for category in catalog.categories if category.visible}
+    expected.add(WELCOME_STEP)
     assert set(wizard.pageIds()) == expected
+
+
+def test_the_wizard_starts_on_the_welcome_page(wizard) -> None:
+    """Vorher landete man ohne Vorrede in einem Formular.
+
+    Die vier mitgelieferten Vorlagen waren nur ueber einen Knopf in der
+    Fussleiste erreichbar und wurden darum praktisch nie gefunden.
+    """
+    from archcustomiser.gui.pages.welcome import WelcomePage
+
+    wizard.restart()
+    assert isinstance(wizard.currentPage(), WelcomePage)
+
+
+def test_the_welcome_page_offers_every_bundled_template(wizard) -> None:
+    vorlagen = [info for _karte, info in wizard.welcome._choices if info is not None]
+    namen = {info.path.stem for info in vorlagen}
+    assert {"minimal", "desktop", "gaming", "development"} <= namen
 
 
 def test_invisible_categories_have_no_page(wizard, catalog) -> None:
@@ -190,6 +211,7 @@ def test_driver_page_appears_with_a_desktop(wizard, catalog, store) -> None:
 
 def test_walking_through_reaches_the_summary(wizard, catalog) -> None:
     wizard.restart()
+    wizard.next()                       # ueber die Startseite hinweg
     visited = []
     for _ in range(30):
         page = wizard.currentPage()
@@ -200,6 +222,35 @@ def test_walking_through_reaches_the_summary(wizard, catalog) -> None:
         wizard.next()
     assert visited[0] == "basics"
     assert visited[-1] == "summary"
+
+
+def test_skipped_steps_are_marked_as_such_in_the_sidebar(wizard, store) -> None:
+    """Der irrefuehrende Teil der alten Schrittliste.
+
+    ``nextId()`` ueberspringt Kategorien, deren Bedingung nicht erfuellt ist --
+    die Liste zeigte sie aber unveraendert an. Wer keinen Desktop gewaehlt hat,
+    wartete so auf die Seite "Grafiktreiber", die nie kommt.
+    """
+    from archcustomiser.gui.widgets.step_sidebar import StepState
+
+    store.set_selection("desktop", ["none"])
+    store.set_selection("windowmanager", [])
+    wizard._refresh_sidebar()
+    assert wizard.sidebar._states["drivers"] is StepState.SKIPPED
+
+    store.toggle("desktop.kde", True)
+    wizard._refresh_sidebar()
+    assert wizard.sidebar._states["drivers"] is not StepState.SKIPPED
+
+
+def test_a_fixed_error_clears_the_mark_again(wizard) -> None:
+    """Ein einmal rot markierter Schritt blieb rot, auch nach der Korrektur."""
+    from archcustomiser.gui.widgets.step_sidebar import StepState
+
+    wizard.sidebar.set_states({"basics": StepState.ERROR})
+    rot = wizard.sidebar._buttons["basics"].styleSheet()
+    wizard.sidebar.set_states({"basics": StepState.DONE})
+    assert wizard.sidebar._buttons["basics"].styleSheet() != rot
 
 
 def test_summary_produces_a_plan(wizard, store) -> None:

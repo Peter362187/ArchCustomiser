@@ -27,7 +27,7 @@ import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable, Literal, Mapping, Sequence
+from typing import Any, Literal, Mapping, Sequence
 
 import yaml
 
@@ -83,10 +83,6 @@ class ProfileLoadResult:
     secret_fields: tuple[str, ...] = ()
     """Geheime Felder, die das Profil nicht enthalten kann und die neu
     eingegeben werden muessen."""
-
-    @property
-    def has_problems(self) -> bool:
-        return any(issue.severity in ("error", "warning") for issue in self.issues)
 
 
 class ProfileService:
@@ -165,7 +161,7 @@ class ProfileService:
             "name": config.profile_name or path.stem,
             "created": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
             "selections": {key: sorted(value) for key, value in sorted(selections.items())},
-            "fields": {key: value for key, value in sorted(config.fields.items())},
+            "fields": self._fields_without_secrets(config),
         }
         if description:
             document["description"] = description
@@ -431,6 +427,33 @@ class ProfileService:
         )
 
     # -- Hilfsfunktionen ------------------------------------------------------
+    def _fields_without_secrets(self, config: BuildConfig) -> dict[str, Any]:
+        """Beim Schreiben dieselbe Grenze ziehen wie beim Lesen.
+
+        Passwoerter leben im ``SecretStore`` und erreichen ``BuildConfig`` auf
+        dem vorgesehenen Weg nie -- deshalb greift diese Pruefung im Normalfall
+        auch nie. Sie steht hier, weil die Zusicherung sonst allein davon
+        abhinge, dass die Oberflaeche sich richtig verhaelt: ein einziger
+        ``set_field`` auf ein geheimes Feld, und das Passwort stuende im Klartext
+        in einer Datei, die der Benutzer weitergibt.
+
+        Beim *Laden* wurde das schon immer abgefangen. Eine Grenze, die nur in
+        einer Richtung haelt, ist keine.
+        """
+        secret_bindings = self._secret_bindings()
+        sauber: dict[str, Any] = {}
+        for key, value in sorted(config.fields.items()):
+            if str(key) in secret_bindings:
+                log.warning(
+                    "Geheimes Feld %r stand in der Konfiguration und wurde beim "
+                    "Speichern entfernt. Das deutet auf einen Fehler im "
+                    "Aufrufer hin -- Passwoerter gehoeren in den SecretStore.",
+                    key,
+                )
+                continue
+            sauber[key] = value
+        return sauber
+
     def _secret_bindings(self) -> frozenset[str]:
         return frozenset(
             spec.binding
@@ -485,8 +508,3 @@ def _field_predicate_true(predicate: Any, config: BuildConfig) -> bool:
         return bool(predicate.evaluate(_FieldOnlyContext(config)))
     except Exception:
         return True
-
-
-def iter_profile_dirs() -> Iterable[Path]:
-    yield bundled_profiles_dir()
-    yield user_profiles_dir()

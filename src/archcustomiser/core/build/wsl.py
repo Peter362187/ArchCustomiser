@@ -32,7 +32,7 @@ import shutil
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
-from typing import Sequence
+from typing import Callable, Sequence
 
 from .errors import BuildError
 
@@ -86,9 +86,21 @@ class Distribution:
     default: bool = False
 
     @property
-    def is_arch(self) -> bool:
+    def name_looks_like_arch(self) -> bool:
+        """Erster, billiger Hinweis -- ohne die Verteilung zu starten.
+
+        Reicht als alleiniges Kriterium nicht: eine Verteilung kann beliebig
+        heissen. Wer seine Installation "meinlinux" nennt, wurde frueher nie
+        gefunden, obwohl ``WslTarget.is_arch()`` sie ueber ``/etc/os-release``
+        zweifelsfrei erkannt haette.
+        """
         lowered = self.name.lower()
         return any(lowered.startswith(prefix) for prefix in ARCH_FAMILY)
+
+    # Rueckwaertsvertraeglicher Name.
+    @property
+    def is_arch(self) -> bool:
+        return self.name_looks_like_arch
 
     @property
     def running(self) -> bool:
@@ -108,18 +120,36 @@ class WslStatus:
 
     @property
     def preferred(self) -> Distribution | None:
-        """Die Arch-Verteilung, die verwendet wird."""
-        arch = self.arch_distributions
-        if not arch:
-            return None
-        for distribution in arch:
-            if distribution.default:
-                return distribution
-        return arch[0]
+        """Die Arch-Verteilung, die verwendet wird -- nach dem Namen."""
+        return _bevorzugte(self.arch_distributions)
+
+    def find_arch(self, probe: Callable[[str], bool] | None = None) -> Distribution | None:
+        """Sucht eine Arch-Verteilung -- notfalls anhand ihres Inhalts.
+
+        Zuerst nach dem Namen, weil das nichts kostet. Findet sich so keine,
+        werden die uebrigen Verteilungen gefragt, ob sie Arch sind: ``probe``
+        liest dort ``/etc/os-release``. Das startet die Verteilung und dauert
+        einen Moment, passiert aber nur, wenn es sonst gar nicht ginge.
+        """
+        nach_namen = self.preferred
+        if nach_namen is not None or probe is None:
+            return nach_namen
+        rest = [d for d in self.distributions if not d.name_looks_like_arch]
+        return _bevorzugte(tuple(d for d in rest if probe(d.name)))
 
     @property
     def usable(self) -> bool:
         return self.installed and self.preferred is not None
+
+
+def _bevorzugte(kandidaten: tuple[Distribution, ...]) -> Distribution | None:
+    """Die Standardverteilung, sonst die erste."""
+    if not kandidaten:
+        return None
+    for distribution in kandidaten:
+        if distribution.default:
+            return distribution
+    return kandidaten[0]
 
 
 # ---------------------------------------------------------------------------
@@ -295,12 +325,26 @@ class WslTarget:
             argv += ["-u", self.user]
         return argv
 
-    def wrap(self, argv: Sequence[str]) -> list[str]:
-        """Macht aus einem Linux-Aufruf einen Windows-Aufruf."""
-        return [*self.prefix(), "-e", *[str(item) for item in argv]]
+    def wrap(self, argv: Sequence[str], *, as_root: bool = False) -> list[str]:
+        """Macht aus einem Linux-Aufruf einen Windows-Aufruf.
+
+        ``as_root`` geht ueber ``wsl -u root``. Das braucht keine
+        Windows-Adminrechte -- die Verteilung selbst entscheidet, wer darin root
+        ist -- und ist der Weg fuer pacman, wenn der angemeldete Benutzer kein
+        root ist und ``sudo`` fehlt (in einer frischen Arch-Verteilung ist das
+        der Normalfall).
+        """
+        vorspann = list(self.prefix())
+        if as_root:
+            vorspann += ["-u", "root"]
+        return [*vorspann, "-e", *[str(item) for item in argv]]
 
     def run(
-        self, argv: Sequence[str], *, timeout: float = DEFAULT_TIMEOUT
+        self,
+        argv: Sequence[str],
+        *,
+        timeout: float = DEFAULT_TIMEOUT,
+        as_root: bool = False,
     ) -> WslResult:
         """Fuehrt einen Befehl aus und liefert seine Ausgabe.
 
@@ -309,7 +353,7 @@ class WslTarget:
         """
         try:
             completed = subprocess.run(
-                self.wrap(argv),
+                self.wrap(argv, as_root=as_root),
                 capture_output=True,
                 timeout=timeout,
                 check=False,
@@ -340,9 +384,22 @@ class WslTarget:
         return result.stdout.strip()
 
     def home(self) -> PurePosixPath:
+        """Das Heimatverzeichnis in der Verteilung.
+
+        Schlaegt der Aufruf fehl, wird das gemeldet statt stillschweigend
+        ``/root`` anzunehmen. Ein geratenes Heimatverzeichnis heisst, dass der
+        gesamte Build am falschen Ort landet -- mitsamt mehreren Gigabyte
+        Arbeitsverzeichnis, die dann niemand mehr wiederfindet.
+        """
         result = self.run(["sh", "-c", "printf %s \"$HOME\""])
         text = result.stdout.strip()
-        return PurePosixPath(text or "/root")
+        if not result.ok or not text:
+            raise WslError(
+                f"Das Heimatverzeichnis in {self.name!r} liess sich nicht "
+                f"ermitteln. Laeuft die Verteilung?",
+                result.stderr.strip() or f"Rueckgabewert {result.returncode}",
+            )
+        return PurePosixPath(text)
 
     # -- Abfragen -------------------------------------------------------------
     def has_command(self, name: str) -> bool:

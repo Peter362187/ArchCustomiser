@@ -26,7 +26,7 @@ pacman, nicht dieses Programm.
 | 6 | ISO-Build ausführen (`mkarchiso` starten) | fertig |
 | 7 | Logging und Fehlerbehandlung | fertig |
 | 8 | Branding | fertig |
-| 9 | Tests | laufend (362) |
+| 9 | Tests | laufend (438) |
 | 10 | UI/UX und Dokumentation | laufend |
 
 **Der Funktionsumfang ist vollständig:** Wizard, Profile, Paketprüfung, Dry-Run,
@@ -73,14 +73,16 @@ Nach dem Neustart in Arch:
 sudo pacman -Syu --needed archiso
 ```
 
-Das Programm erkennt das selbst und führt beim ersten „ISO erstellen" durch
-diese Schritte. Platzbedarf: WSL legt seine virtuelle Platte auf `C:` ab, für
+Das Programm erkennt das selbst und **führt beim ersten „ISO erstellen"
+durch diese Schritte** — es zeigt sie der Reihe nach an, jeweils mit einem
+Knopf zum Kopieren. Ausgeführt werden sie nicht automatisch: `wsl --install`
+braucht Administratorrechte und einen Neustart. Platzbedarf: WSL legt seine virtuelle Platte auf `C:` ab, für
 ein Desktop-Abbild mit Spielen werden dort 25–40 GB gebraucht.
 
 ### Zum Bauen einer ISO (direkt auf Arch Linux)
 
 ```bash
-sudo pacman -S --needed archiso arch-install-scripts squashfs-tools libisoburn dosfstools mtools grub openssl
+sudo pacman -S --needed archiso arch-install-scripts squashfs-tools libisoburn dosfstools mtools pacman gzip libarchive awk openssl
 ```
 
 Das Programm prüft das beim Start selbst und nennt fehlende Pakete samt
@@ -107,37 +109,87 @@ Spielen realistisch 25–40 GB und muss auf einem Linux-Dateisystem liegen.
 
 ## Installation
 
+### Windows — der einfache Weg
+
+1. Auf der Projektseite auf **Code → Download ZIP** klicken und den Ordner
+   entpacken. Wer git nutzt, klont stattdessen:
+
+   ```bash
+   git clone https://github.com/Peter362187/ArchCustomiser.git
+   ```
+
+2. Im entpackten Ordner **`ArchCustomiser.bat` doppelklicken.**
+
+Das war alles. Beim ersten Mal richtet die Datei die Programmumgebung selbst
+ein — das dauert ein paar Minuten und lädt rund 670 MB. Danach startet ein
+Doppelklick das Programm sofort.
+
+Fehlt Python, sagt sie das und öffnet die Download-Seite. Wichtig ist dort der
+Haken **„Add Python to PATH"**. Gebraucht wird Python 3.11 oder neuer.
+
+#### Wenn beim Doppelklick nichts passiert
+
+Sollte das Fenster kommentarlos verschwinden, hilft ein Blick ins Protokoll:
+
+```
+%LOCALAPPDATA%\ArchCustomiser\State\archcustomiser.log
+```
+
+Diesen Pfad in den Explorer einfügen. Seit dieser Fassung zeigt das Programm
+Abstürze zusätzlich als Fenster an, statt still zu enden.
+
+Führt nichts zum Ziel: den Ordner `.venv` löschen und `ArchCustomiser.bat`
+erneut doppelklicken. Damit wird die Einrichtung von vorn gemacht.
+
+### Linux und macOS
+
 ```bash
-git clone <repository> && cd ArchCustomiser
-python -m venv .venv
+git clone https://github.com/Peter362187/ArchCustomiser.git && cd ArchCustomiser
 ```
 
 ```bash
-.venv/bin/pip install -e ".[dev]"
+python -m venv .venv && .venv/bin/pip install -e ".[dev]"
 ```
 
-Unter Windows entsprechend `.venv\Scripts\pip`.
+```bash
+.venv/bin/python -m archcustomiser
+```
+
+Alternativ ohne Quellordner, direkt aus dem Repository:
+
+```bash
+pipx install git+https://github.com/Peter362187/ArchCustomiser.git
+```
+
+Danach startet `archcustomiser` die Oberfläche.
 
 ---
 
 ## Verwendung
 
+Unter Windows: `ArchCustomiser.bat` doppelklicken.
+
+Sonst, mit aktivierter Programmumgebung:
+
 ```bash
 python -m archcustomiser
 ```
 
-Weitere Aufrufformen:
+Ohne Aktivierung geht es direkt über den Pfad — `.venv/bin/python` unter
+Linux und macOS, `.venv\Scripts\python.exe` unter Windows.
 
-```bash
-python -m archcustomiser --dry-run profiles/gaming.yaml
-```
+Weitere Aufrufformen für die Kommandozeile:
 
 ```bash
 python -m archcustomiser --check-env
 ```
 
 ```bash
-python -m archcustomiser --export-profile profiles/gaming.yaml --out ~/flos-profil.tar.gz
+python -m archcustomiser --dry-run src/archcustomiser/profiles/gaming.yaml
+```
+
+```bash
+python -m archcustomiser --export-profile src/archcustomiser/profiles/gaming.yaml --out ~/flos-profil.tar.gz
 ```
 
 Der Wizard führt durch dreizehn Schritte. Seiten, die nicht zutreffen, werden
@@ -213,7 +265,7 @@ gefundenen Paket ab.
 
 Ein Profil hält die Auswahl fest und lässt sich jederzeit wieder laden.
 Mitgeliefert werden `minimal`, `desktop`, `gaming` und `development` im
-Verzeichnis `profiles/`. Eigene Profile landen unter
+Verzeichnis `src/archcustomiser/profiles/`. Eigene Profile landen unter
 `~/.config/archcustomiser/profiles/`.
 
 ```yaml
@@ -330,7 +382,7 @@ muss der Anbieter vorher feststehen.
 
 **Logdatei**
 Linux: `~/.local/state/archcustomiser/archcustomiser.log`
-Windows: `%LOCALAPPDATA%\ArchCustomiser\State\archcustomiser.log`
+%LOCALAPPDATA%\ArchCustomiser\State\archcustomiser.log
 Passwörter und Passwort-Hashes werden dort maskiert.
 
 ---
@@ -356,10 +408,18 @@ src/archcustomiser/
 │   ├── store.py             einzige Stelle, die Konfiguration verändert
 │   ├── wizard.py            QWizard, Seitenreihenfolge, Profile
 │   └── pages/               vier generische Seitentypen
-data/catalog/                der gesamte Optionsumfang als YAML
-profiles/                    mitgelieferte Profile
-tests/                       362 Tests, ohne Netz und ohne Bildschirm
+├── data/catalog/            der gesamte Optionsumfang als YAML
+└── profiles/                mitgelieferte Profile
+
+tests/                       438 Tests, ohne Netz und ohne Bildschirm
+tools/                       Hilfsskripte für die Entwicklung
+ArchCustomiser.bat           Doppelklick-Start, richtet sich selbst ein
 ```
+
+Katalog und Profile liegen **innerhalb** des Pakets. Damit landen sie in einem
+Wheel und die Anwendung funktioniert auch ohne Quellordner — vorher fand sie
+ihren Katalog nur, wenn sie mit `pip install -e` an Ort und Stelle installiert
+war.
 
 Ausführlicher in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 
@@ -368,7 +428,7 @@ Ausführlicher in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 Die Oberfläche kennt keine einzige Desktop-Umgebung namentlich. Es gibt vier
 Seitentypen (`selection`, `form`, `free_packages`, `summary`); alles andere ist
 YAML. Eine neue Desktop-Umgebung, ein neuer Kernel, ein neues Eingabefeld oder
-eine komplette neue Kategorie ist ein Eintrag in `data/catalog/` — ohne eine
+eine komplette neue Kategorie ist ein Eintrag in `src/archcustomiser/data/catalog/` — ohne eine
 Zeile Python.
 
 ---

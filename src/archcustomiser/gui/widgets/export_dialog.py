@@ -14,7 +14,6 @@ import logging
 from pathlib import Path
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
@@ -28,6 +27,7 @@ from PySide6.QtWidgets import (
 
 from ...core.archiso import GeneratedProfile
 from .. import theme
+from .common import copy_to_clipboard, open_path
 
 log = logging.getLogger(__name__)
 
@@ -69,7 +69,8 @@ class ExportResultDialog(QDialog):
         if profile.warnings:
             notes = QPlainTextEdit("\n".join(f"- {w}" for w in profile.warnings))
             notes.setReadOnly(True)
-            notes.setFixedHeight(110)
+            notes.setMinimumHeight(110)
+            notes.setMaximumHeight(240)
             layout.addWidget(QLabel("Hinweise:"))
             layout.addWidget(notes)
 
@@ -78,8 +79,9 @@ class ExportResultDialog(QDialog):
         steps = _next_steps(target, profile, as_archive=as_archive)
         self.commands = QPlainTextEdit(steps)
         self.commands.setReadOnly(True)
-        self.commands.setFont(QFont("Consolas", 9))
-        self.commands.setFixedHeight(120)
+        self.commands.setFont(theme.mono_font())
+        self.commands.setMinimumHeight(120)
+        self.commands.setMaximumHeight(260)
         layout.addWidget(self.commands)
 
         hints = [
@@ -101,7 +103,8 @@ class ExportResultDialog(QDialog):
             )
         hint = QLabel("\n\n".join(hints))
         hint.setWordWrap(True)
-        hint.setStyleSheet(f"color: {theme.muted()}; font-size: 11px;")
+        hint.setFont(theme.small_font())
+        hint.setStyleSheet(f"color: {theme.muted()};")
         layout.addWidget(hint)
 
         buttons = QHBoxLayout()
@@ -116,9 +119,8 @@ class ExportResultDialog(QDialog):
         layout.addLayout(buttons)
 
     def _copy(self) -> None:
-        from PySide6.QtWidgets import QApplication
 
-        QApplication.clipboard().setText(self.commands.toPlainText())
+        copy_to_clipboard(self.commands.toPlainText(), self.copy_button)
 
 
 def _next_steps(target: Path, profile: GeneratedProfile, *, as_archive: bool) -> str:
@@ -181,8 +183,9 @@ class ErrorDialog(QDialog):
 
         self.details = QPlainTextEdit(technical)
         self.details.setReadOnly(True)
-        self.details.setFont(QFont("Consolas", 9))
-        self.details.setFixedHeight(120)
+        self.details.setFont(theme.mono_font())
+        self.details.setMinimumHeight(120)
+        self.details.setMaximumHeight(260)
         self.details.setVisible(False)
         layout.addWidget(self.details)
 
@@ -214,7 +217,4 @@ class ErrorDialog(QDialog):
     def _open_log(self) -> None:
         if self.log_path is None:
             return
-        from PySide6.QtCore import QUrl
-        from PySide6.QtGui import QDesktopServices
-
-        QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.log_path)))
+        open_path(self.log_path)

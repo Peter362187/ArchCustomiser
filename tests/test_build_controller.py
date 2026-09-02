@@ -235,3 +235,70 @@ def test_preflight_collects_every_finding(tmp_path) -> None:
     report = run_preflight(tmp_path / "work", tmp_path / "out", installed_mb=3000)
     assert report.checks
     assert isinstance(report.ok, bool)
+
+
+# ---------------------------------------------------------------------------
+# Bedingt noetige Werkzeuge -- Befund der Durchsicht vom 02.09.2026
+# ---------------------------------------------------------------------------
+
+
+def _umgebung_ohne(*fehlende: str):
+    """Eine Linux-Umgebung, in der bestimmte Werkzeuge fehlen."""
+    from archcustomiser.core.environment import (
+        CONDITIONAL_TOOLS,
+        Environment,
+        _OPTIONAL_TOOLS,
+        _REQUIRED_TOOLS,
+        Tool,
+    )
+
+    tools = []
+    for name, paket, zweck in _REQUIRED_TOOLS:
+        tools.append(Tool(name, paket, zweck, True, None if name in fehlende else f"/usr/bin/{name}"))
+    for name, paket, zweck in _OPTIONAL_TOOLS:
+        tools.append(Tool(name, paket, zweck, False, None if name in fehlende else f"/usr/bin/{name}"))
+    for name, paket, zweck in CONDITIONAL_TOOLS.values():
+        tools.append(Tool(name, paket, zweck, False, None if name in fehlende else f"/usr/bin/{name}"))
+    return Environment(
+        platform="linux", can_build=True, tools=tuple(tools), privilege_mode="rootless"
+    )
+
+
+def test_missing_grub_does_not_block_a_systemd_boot_build(tmp_path, monkeypatch) -> None:
+    """grub-mkstandalone stand bei den unbedingt noetigen Werkzeugen.
+
+    In mkarchiso ruft es ausschliesslich ``_make_bootmode_uefi.grub`` auf;
+    grubenv und loopback.cfg entstehen per printf und sed. Wer systemd-boot
+    gewaehlt hatte, wurde also ohne jeden Grund am Bauen gehindert.
+    """
+    from archcustomiser.core.build.preflight import run_preflight
+
+    monkeypatch.setattr("sys.platform", "linux")
+    report = run_preflight(
+        tmp_path / "work",
+        tmp_path / "out",
+        installed_mb=1000,
+        bootmodes=("bios.syslinux", "uefi.systemd-boot"),
+        environment=_umgebung_ohne("grub-mkstandalone"),
+    )
+    namen = [check.name for check in report.blocking]
+    assert "Bootloader-Werkzeuge" not in namen
+    assert "Werkzeuge" not in namen, f"unerwartet blockiert: {report.blocking}"
+
+
+def test_missing_grub_does_block_a_grub_build(tmp_path, monkeypatch) -> None:
+    """Bei uefi.grub wird es dagegen tatsaechlich gebraucht."""
+    from archcustomiser.core.build.preflight import run_preflight
+
+    monkeypatch.setattr("sys.platform", "linux")
+    report = run_preflight(
+        tmp_path / "work",
+        tmp_path / "out",
+        installed_mb=1000,
+        bootmodes=("bios.syslinux", "uefi.grub"),
+        environment=_umgebung_ohne("grub-mkstandalone"),
+    )
+    blockierend = [check for check in report.blocking if check.name == "Bootloader-Werkzeuge"]
+    assert blockierend, "der fehlende Bootloader faellt nicht auf"
+    assert "grub" in blockierend[0].detail
+    assert "pacman -S" in blockierend[0].detail, "ohne Abhilfe ist die Meldung nutzlos"

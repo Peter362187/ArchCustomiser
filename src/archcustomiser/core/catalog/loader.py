@@ -248,7 +248,7 @@ def _normalize_unit(unit: str) -> str:
 
 
 _FILE_KEYS = frozenset(
-    {"target", "source", "content", "mode", "owner", "template", "when", "owned_by"}
+    {"target", "content", "mode", "owner", "when", "owned_by"}
 )
 
 
@@ -271,11 +271,9 @@ def _parse_files(raw: Any, where: str) -> tuple[FileEntry, ...]:
             result.append(
                 FileEntry(
                     target=target,
-                    source=_str(data, "source", spot),
                     content=_str(data, "content", spot),
                     mode=_str(data, "mode", spot, "0644"),
                     owner=_str(data, "owner", spot),
-                    template=_bool(data, "template", spot),
                     when=_predicate(data, "when", spot),
                     owned_by=_str(data, "owned_by", spot),
                 )

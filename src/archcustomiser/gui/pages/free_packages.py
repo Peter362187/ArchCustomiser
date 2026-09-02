@@ -27,10 +27,12 @@ from PySide6.QtWidgets import (
 )
 
 from ...core.catalog import Category
+from ...core.resolver import Issue
 from ...core.packages import EntryKind, parse_list
 from .. import theme
 from ..packages_worker import PackageController
 from ..store import SelectionStore
+from ..widgets.common import brush
 from .base import CatalogPageBase
 
 log = logging.getLogger(__name__)
@@ -90,7 +92,8 @@ class FreePackagesPage(CatalogPageBase):
 
         self.editor = QPlainTextEdit()
         self.editor.setPlaceholderText("neovim\nhtop\nwget")
-        self.editor.setFixedHeight(110)
+        self.editor.setMinimumHeight(110)
+        self.editor.setMaximumHeight(240)
         self.editor.textChanged.connect(self._timer.start)
         self._root.addWidget(self.editor)
 
@@ -107,7 +110,8 @@ class FreePackagesPage(CatalogPageBase):
 
         footer = QHBoxLayout()
         self.status = QLabel(self.controller.status_text())
-        self.status.setStyleSheet(f"color: {theme.muted()}; font-size: 11px;")
+        self.status.setFont(theme.small_font())
+        self.status.setStyleSheet(f"color: {theme.muted()};")
         footer.addWidget(self.status, 1)
 
         self.refresh_button = QPushButton("Paketdaten aktualisieren")
@@ -128,7 +132,9 @@ class FreePackagesPage(CatalogPageBase):
         try:
             self.controller.ready.disconnect(self._on_refreshed)
         except (RuntimeError, TypeError):
-            pass
+            # Schon getrennt oder nie verbunden -- kein Grund zur Sorge, aber
+            # auch kein Grund, gar nichts zu sagen.
+            log.debug("Signal war bereits getrennt", exc_info=True)
 
     def sync_from_store(self) -> None:
         current = "\n".join(self.store.extra_packages())
@@ -165,9 +171,9 @@ class FreePackagesPage(CatalogPageBase):
                     "" if ambiguous else entry.message,
                 ]
             )
-            brush = _brush(_colour(entry.kind))
-            item.setForeground(1, brush)
-            item.setForeground(2, brush)
+            farbe = brush(_colour(entry.kind))
+            item.setForeground(1, farbe)
+            item.setForeground(2, farbe)
             item.setToolTip(1, entry.message)
             item.setToolTip(2, "\n".join(entry.notes) if entry.notes else entry.message)
             for column in range(3):
@@ -183,7 +189,37 @@ class FreePackagesPage(CatalogPageBase):
             if entry.kind.is_blocking:
                 self._blocking += 1
 
+        self._publish_package_errors(report)
         self.completeChanged.emit()
+
+    def _publish_package_errors(self, report) -> None:
+        """Blockierende Paketfehler nach oben geben.
+
+        Vorher zaehlte ein blockierender Eintrag nur ``self._blocking`` hoch und
+        faerbte eine Baumzeile. Der Weiter-Knopf war grau, die Hinweisleiste
+        oben blieb leer -- und wer nicht genau hinsah, suchte den Grund
+        vergebens.
+        """
+        schlimme = [e for e in report.entries if e.kind.is_blocking]
+        if not schlimme:
+            self.set_local_issues(())
+            return
+        namen = ", ".join(e.query for e in schlimme[:5])
+        if len(schlimme) > 5:
+            namen += f" und {len(schlimme) - 5} weitere"
+        self.set_local_issues(
+            (
+                Issue(
+                    severity="error",
+                    code="package_unknown",
+                    category_id=self.category.id,
+                    message=(
+                        f"In den Arch-Repositories nicht gefunden: {namen}. "
+                        f"Einzelheiten stehen in der Tabelle darunter."
+                    ),
+                ),
+            )
+        )
 
     def _add_provider_picker(self, item: QTreeWidgetItem, entry) -> None:
         """Bei mehreren Anbietern muss vorab entschieden werden.
@@ -210,8 +246,3 @@ class FreePackagesPage(CatalogPageBase):
     def isComplete(self) -> bool:
         return self._blocking == 0 and super().isComplete()
 
-
-def _brush(colour: str):
-    from PySide6.QtGui import QBrush, QColor
-
-    return QBrush(QColor(colour))

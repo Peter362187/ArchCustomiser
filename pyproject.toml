@@ -26,7 +26,17 @@ archcustomiser = "archcustomiser.__main__:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-archcustomiser = ["py.typed"]
+# Ohne diese Eintraege enthaelt ein Wheel zwar den Code, aber weder Katalog
+# noch Profile -- die Anwendung startet dann mit "Katalog fehlerhaft" und
+# bricht ab. Bisher funktionierte nur der editierbare Install (-e), weil der
+# den Quellordner an Ort und Stelle laesst.
+archcustomiser = [
+    "py.typed",
+    "data/catalog/*.yaml",
+    "data/catalog/categories/*.yaml",
+    "profiles/*.yaml",
+    "assets/icons/*.svg",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

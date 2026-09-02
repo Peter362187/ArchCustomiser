@@ -28,7 +28,8 @@ AUSGESCHLOSSENE_ORDNER = {
 # im Repository, und die Anwendung liess sich daraus nicht starten.
 NUR_OBEN_AUSGESCHLOSSEN = {"build", "dist", "out", "work"}
 
-# Dateimuster, die nie mitgehen.
+# Dateimuster, die nie mitgehen. Bilder unter assets/ sind ausdruecklich
+# KEINE Ausnahme -- sie gehoeren zum Programm.
 AUSGESCHLOSSENE_MUSTER = ("*.pyc", "*.pyo", "*.iso", "*.tar.gz", "*.log", "*.swp")
 
 

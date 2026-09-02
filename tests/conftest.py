@@ -166,4 +166,13 @@ def resolver(catalog):
 
 @pytest.fixture
 def profiles_dir() -> Path:
-    return Path(__file__).resolve().parent.parent / "profiles"
+    """Die mitgelieferten Profile -- ueber die Paketfunktion, nicht ueber
+    einen zusammengesetzten Pfad.
+
+    Frueher stand hier ``parent.parent / "profiles"``. Das band den Test an
+    das Repo-Layout und waere beim Verschieben der Daten ins Paket
+    stillschweigend ins Leere gelaufen.
+    """
+    from archcustomiser.core.paths import bundled_profiles_dir
+
+    return bundled_profiles_dir()

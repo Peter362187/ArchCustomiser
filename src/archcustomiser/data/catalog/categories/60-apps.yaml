@@ -17,6 +17,7 @@ schema_version: 1
 category:
   id: apps
   title: "Programme"
+  icon: "apps"
   subtitle: "Anwendungen, die im fertigen System bereitstehen sollen."
   step: 60
   page_type: selection

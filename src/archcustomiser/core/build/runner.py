@@ -21,22 +21,32 @@ from __future__ import annotations
 
 import logging
 import os
-import shutil
 import subprocess
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Sequence
+from typing import Callable
 
-from .errors import BuildCancelled, BuildFailed, MkarchisoMissing
-from .progress import ProgressParser, ProgressState, split_lines, summarise_failure
+from .errors import BuildCancelled, BuildFailed
+from .progress import ProgressParser, ProgressState, summarise_failure
 from .targets import ExecutionTarget, LocalTarget
 
 log = logging.getLogger(__name__)
 
 READ_SIZE = 4096
 TERMINATE_GRACE_SECONDS = 8.0
+
+# Ein Build erzeugt einige zehntausend Zeilen; bei einem haengenden Werkzeug
+# koennen es beliebig viele werden. Behalten wird das Ende, denn dort steht der
+# Fehler -- summarise_failure braucht ohnehin nur die letzten Zeilen.
+MAX_KEPT_LINES = 5000
+
+# Schutz gegen ein Werkzeug, das weder Wagenruecklauf noch Zeilenumbruch
+# schreibt: ohne Obergrenze waechst der Zwischenpuffer, bis der Speicher voll
+# ist.
+MAX_BUFFER_BYTES = 1 << 20
 
 LineCallback = Callable[[str], None]
 ProgressCallback = Callable[[ProgressState], None]
@@ -97,6 +107,12 @@ class MkarchisoRunner:
         self.target: ExecutionTarget = target or LocalTarget(executable)
         self._process: subprocess.Popen[bytes] | None = None
         self._cancelled = threading.Event()
+        # Schuetzt das Fenster zwischen "Prozess starten" und "Prozess
+        # eintragen". Ohne die Sperre konnte ein Abbruch genau dazwischen
+        # landen: cancel() sah noch kein Prozessobjekt, run() pruefte danach
+        # nicht mehr auf Abbruch -- der Build lief vollstaendig durch und warf
+        # erst am Ende BuildCancelled. Vierzig Minuten fuer nichts.
+        self._lock = threading.Lock()
 
     # -- Aufruf zusammenbauen -------------------------------------------------
     def build_argv(self) -> list[str]:
@@ -163,27 +179,34 @@ class MkarchisoRunner:
     ) -> BuildResult:
         argv = self.build_argv()
         parser = ProgressParser()
-        lines: list[str] = []
+        lines: deque[str] = deque(maxlen=MAX_KEPT_LINES)
         started = time.monotonic()
 
         log.info("Starte: %s", " ".join(argv))
         self.target.make_dirs(self.out_dir, self.work_dir)
 
-        try:
-            process = subprocess.Popen(
-                argv,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,   # Reihenfolge bleibt so erhalten
-                stdin=subprocess.DEVNULL,   # mkarchiso darf nichts erfragen
-                bufsize=0,
-                shell=False,
-                env=self.environment(),
-                cwd=self.target.cwd(),
-            )
-        except OSError as exc:
-            raise BuildFailed(127, (f"{argv[0]} liess sich nicht starten: {exc}",)) from exc
-
-        self._process = process
+        with self._lock:
+            # Vor dem Start pruefen. Bisher setzte ein Abbruch zu diesem
+            # Zeitpunkt nur das Ereignis -- der Prozess startete trotzdem und
+            # lief bis zum Ende durch.
+            if self._cancelled.is_set():
+                raise BuildCancelled()
+            try:
+                process = subprocess.Popen(
+                    argv,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,   # Reihenfolge bleibt so erhalten
+                    stdin=subprocess.DEVNULL,   # mkarchiso darf nichts erfragen
+                    bufsize=0,
+                    shell=False,
+                    env=self.environment(),
+                    cwd=self.target.cwd(),
+                )
+            except OSError as exc:
+                raise BuildFailed(
+                    127, (f"{argv[0]} liess sich nicht starten: {exc}",)
+                ) from exc
+            self._process = process
         buffer = b""
         try:
             assert process.stdout is not None
@@ -194,6 +217,11 @@ class MkarchisoRunner:
                 buffer += chunk
                 # An \r UND \n trennen; einen unvollstaendigen Rest behalten.
                 buffer, ready = _take_complete(buffer)
+                if len(buffer) > MAX_BUFFER_BYTES:
+                    # Ein Werkzeug ohne Zeilenende. Lieber ein Bruchstueck
+                    # ausgeben als den Speicher volllaufen lassen.
+                    ready.append(buffer)
+                    buffer = b""
                 for raw in ready:
                     text = raw.decode("utf-8", errors="replace")
                     lines.append(text)
@@ -209,8 +237,19 @@ class MkarchisoRunner:
                 if on_line is not None:
                     on_line(text)
                 parser.feed(text)
+            # Die Pipe schliessen, bevor auf den Prozess gewartet wird.
+            # Bricht die Schleife durch eine Ausnahme ab -- ein on_line-Rueckruf
+            # ist ein Qt-Signal und kann werfen --, dann wartet wait() sonst auf
+            # einen Prozess, der seinerseits auf Platz in der vollen Pipe
+            # wartet. Beide warten aufeinander.
+            if process.stdout is not None:
+                try:
+                    process.stdout.close()
+                except OSError:
+                    pass
             returncode = process.wait()
-            self._process = None
+            with self._lock:
+                self._process = None
 
         duration = time.monotonic() - started
 
@@ -228,7 +267,7 @@ class MkarchisoRunner:
             iso_path=None,
             iso_location=iso_location or "",
             duration_seconds=duration,
-            lines=lines,
+            lines=list(lines),
             errors=parser.errors,
             warnings=parser.warnings,
         )
@@ -259,7 +298,8 @@ class MkarchisoRunner:
         auf ein Signal nicht sofort reagiert.
         """
         self._cancelled.set()
-        process = self._process
+        with self._lock:
+            process = self._process
         if process is None or process.poll() is not None:
             return
         log.info("Abbruch angefordert")
@@ -267,11 +307,20 @@ class MkarchisoRunner:
             process.terminate()
         except OSError:
             return
-        deadline = time.monotonic() + TERMINATE_GRACE_SECONDS
-        while time.monotonic() < deadline:
-            if process.poll() is not None:
-                return
-            time.sleep(0.2)
+        # wait() mit Frist statt einer Schleife aus poll() und sleep():
+        # das Betriebssystem weckt uns, sobald der Prozess wirklich weg ist,
+        # statt fuenfmal je Sekunde nachzusehen.
+        try:
+            process.wait(timeout=TERMINATE_GRACE_SECONDS)
+            return
+        except subprocess.TimeoutExpired:
+            pass
+        log.warning(
+            "mkarchiso hat nach %.0f s nicht reagiert -- wird hart beendet. "
+            "Unterprozesse wie pacstrap oder mksquashfs nehmen ein Signal "
+            "nicht immer sofort an.",
+            TERMINATE_GRACE_SECONDS,
+        )
         try:
             process.kill()
         except OSError:

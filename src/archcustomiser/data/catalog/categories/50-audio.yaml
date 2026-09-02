@@ -14,6 +14,7 @@ schema_version: 1
 category:
   id: audio
   title: "Audio"
+  icon: "audio"
   subtitle: "Welches Audio-System verwendet werden soll."
   step: 50
   page_type: selection

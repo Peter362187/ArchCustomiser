@@ -23,6 +23,7 @@ schema_version: 1
 category:
   id: display_manager
   title: "Display-Manager"
+  icon: "login"
   step: 28
   visible: false
   page_type: selection

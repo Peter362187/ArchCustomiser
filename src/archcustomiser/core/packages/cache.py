@@ -47,6 +47,10 @@ class CacheEntry:
     sha256: str
     size: int
     package_count: int
+    # Woher die Daten stammen. Steht in der Metadatei, wurde aber bisher beim
+    # Laden nicht mitgenommen -- weshalb ein erneutes store() die Mirror-Adresse
+    # mangels besserem Wissen durch den oertlichen Cache-Pfad ersetzte.
+    url: str = ""
 
     def read(self) -> bytes:
         return self.path.read_bytes()
@@ -186,6 +190,7 @@ class PackageCache:
             repo=repo,
             path=db_path,
             etag=meta.get("etag"),
+            url=str(meta.get("url") or ""),
             last_modified=_parse_iso(meta.get("last_modified")),
             fetched_at=_parse_iso(meta.get("fetched_at")) or _now(),
             sha256=digest,
@@ -230,6 +235,7 @@ class PackageCache:
             repo=repo,
             path=db_path,
             etag=etag,
+            url=url,
             last_modified=last_modified,
             fetched_at=fetched,
             sha256=digest,
@@ -307,8 +313,3 @@ class PackageCache:
             except OSError as exc:
                 log.warning("%s nicht loeschbar: %s", path, exc)
         return removed
-
-    def total_size(self) -> int:
-        if not self.root.is_dir():
-            return 0
-        return sum(path.stat().st_size for path in self.root.glob("*") if path.is_file())

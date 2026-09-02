@@ -14,6 +14,7 @@ schema_version: 1
 category:
   id: drivers
   title: "Grafiktreiber"
+  icon: "driver"
   subtitle: "Treiber fuer die Grafikkarte des Zielsystems."
   step: 65
   page_type: selection

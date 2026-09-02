@@ -19,6 +19,7 @@ schema_version: 1
 category:
   id: desktop
   title: "Desktop-Umgebung"
+  icon: "desktop"
   subtitle: "Eine vollstaendige Arbeitsumgebung mit Panel, Dateimanager und Einstellungen."
   step: 20
   page_type: selection
