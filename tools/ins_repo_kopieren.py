@@ -15,13 +15,18 @@ import shutil
 import sys
 from pathlib import Path
 
-# Verzeichnisse, die nie mitgehen.
+# Verzeichnisse, die in beliebiger Tiefe nie mitgehen.
 AUSGESCHLOSSENE_ORDNER = {
     ".venv", "venv", "env", ".git",
     "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache",
-    "build", "dist", "out", "work",
     ".vscode", ".idea",
 }
+
+# Nur GANZ OBEN ausgeschlossen. "build" und "out" sind auch Namen echter
+# Quellverzeichnisse -- src/archcustomiser/core/build/ etwa enthaelt das
+# gesamte ISO-Bau-System. Ohne diese Unterscheidung fehlten neun Quelldateien
+# im Repository, und die Anwendung liess sich daraus nicht starten.
+NUR_OBEN_AUSGESCHLOSSEN = {"build", "dist", "out", "work"}
 
 # Dateimuster, die nie mitgehen.
 AUSGESCHLOSSENE_MUSTER = ("*.pyc", "*.pyo", "*.iso", "*.tar.gz", "*.log", "*.swp")
@@ -30,6 +35,8 @@ AUSGESCHLOSSENE_MUSTER = ("*.pyc", "*.pyo", "*.iso", "*.tar.gz", "*.log", "*.swp
 def gehoert_dazu(pfad: Path, wurzel: Path) -> bool:
     relativ = pfad.relative_to(wurzel)
     if any(teil in AUSGESCHLOSSENE_ORDNER for teil in relativ.parts):
+        return False
+    if relativ.parts and relativ.parts[0] in NUR_OBEN_AUSGESCHLOSSEN:
         return False
     if any(relativ.match(muster) for muster in AUSGESCHLOSSENE_MUSTER):
         return False

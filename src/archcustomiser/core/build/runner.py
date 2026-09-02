@@ -1,0 +1,310 @@
+"""Startet ``mkarchiso`` und liest seine Ausgabe mit.
+
+Die einzige Stelle des Programms, die einen langlaufenden Prozess startet.
+
+Vier Dinge, die hier bewusst so und nicht anders gemacht sind:
+
+* **``-v`` ist nicht optional.** Ohne den Schalter steht ``quiet=y`` und
+  mkarchiso gibt keine einzige INFO-Zeile aus -- es gaebe dann keinerlei
+  Fortschrittsinformation, nur einen Prozess, der zwanzig Minuten schweigt.
+* **Ausgabe wird byteweise gelesen, nicht zeilenweise.** mksquashfs und xorriso
+  schreiben ihren Fortschritt mit Wagenruecklauf statt Zeilenumbruch. Ein
+  ``for line in process.stdout`` wuerde waehrend der laengsten Bauphase blockieren.
+* **Kein ``shell=True``, feste Argumentliste.** Pfade kommen aus Dialogen.
+* **``-r`` wird nicht verwendet.** Der Schalter loescht das Arbeitsverzeichnis
+  am Ende -- aber schon *waehrend* der ISO-Erzeugung Teile davon, und er
+  verweigert die Arbeit, wenn das Verzeichnis vorher existierte. Aufgeraeumt
+  wird stattdessen selbst, nach Auswertung des Ergebnisses.
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+import shutil
+import subprocess
+import threading
+import time
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Callable, Sequence
+
+from .errors import BuildCancelled, BuildFailed, MkarchisoMissing
+from .progress import ProgressParser, ProgressState, split_lines, summarise_failure
+from .targets import ExecutionTarget, LocalTarget
+
+log = logging.getLogger(__name__)
+
+READ_SIZE = 4096
+TERMINATE_GRACE_SECONDS = 8.0
+
+LineCallback = Callable[[str], None]
+ProgressCallback = Callable[[ProgressState], None]
+
+
+@dataclass(slots=True)
+class BuildResult:
+    returncode: int
+    iso_path: Path | None
+    duration_seconds: float
+    iso_location: str = ""
+    """Wo die ISO auf dem Zielrechner liegt -- in dessen eigener Schreibweise.
+
+    Beim Bau in WSL ist das ein Linux-Pfad. Er darf nicht durch ``pathlib``
+    laufen: unter Windows wuerden die Schraegstriche zu Backslashes, und kein
+    Werkzeug faende die Datei mehr. Genau daran ist der erste echte Bau
+    gescheitert -- ``cp`` suchte nach einer Datei mit Backslashes im Namen.
+    ``iso_path`` wird erst gesetzt, wenn die Datei hier angekommen ist.
+    """
+    lines: list[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+
+    @property
+    def succeeded(self) -> bool:
+        return self.returncode == 0 and bool(self.iso_location)
+
+    @property
+    def size_mb(self) -> float:
+        if self.iso_path is None or not self.iso_path.is_file():
+            return 0.0
+        return self.iso_path.stat().st_size / 1_048_576
+
+
+class MkarchisoRunner:
+    """Fuehrt einen einzelnen mkarchiso-Lauf aus."""
+
+    def __init__(
+        self,
+        profile_dir: Path,
+        work_dir: Path,
+        out_dir: Path,
+        *,
+        privilege_mode: str = "rootless",
+        source_date_epoch: int | None = None,
+        executable: str | None = None,
+        target: ExecutionTarget | None = None,
+    ) -> None:
+        # Bewusst als Text und nicht als Path: bei einem Bau in WSL sind das
+        # Linux-Pfade, und pathlib wuerde daraus unter Windows '\home\jason'
+        # machen.
+        self.profile_dir = str(profile_dir)
+        self.work_dir = str(work_dir)
+        self.out_dir = str(out_dir)
+        self.privilege_mode = privilege_mode
+        self.source_date_epoch = source_date_epoch
+        self.executable = executable
+        self.target: ExecutionTarget = target or LocalTarget(executable)
+        self._process: subprocess.Popen[bytes] | None = None
+        self._cancelled = threading.Event()
+
+    # -- Aufruf zusammenbauen -------------------------------------------------
+    def build_argv(self) -> list[str]:
+        # Ein ausdruecklich gesetztes Programm hat Vorrang; sonst entscheidet
+        # das Ziel, wie mkarchiso dort heisst.
+        argv = [
+            self.executable or self.target.resolve_executable(),
+            "-v",                       # ohne das gibt es keine Fortschrittsmeldungen
+            "-w", self.work_dir,
+            "-o", self.out_dir,
+            self.profile_dir,
+        ]
+
+        if self.privilege_mode == "pkexec":
+            # pkexec setzt die Umgebung selbst zurueck; der Aufruf bleibt eine
+            # feste Argumentliste ohne Shell.
+            argv = ["pkexec", *argv]
+        elif self.privilege_mode == "sudo":
+            argv = ["sudo", "--", *argv]
+
+        # Diese Variablen muss mkarchiso sehen -- auch ueber eine
+        # Systemgrenze hinweg.
+        return self.target.wrap(argv, env=self.target_environment())
+
+    def target_environment(self) -> dict[str, str]:
+        """Was mkarchiso selbst braucht -- unabhaengig davon, wo es laeuft.
+
+        ``SOURCE_DATE_EPOCH`` liest mkarchiso ausdruecklich aus der Umgebung
+        (``[[ -v SOURCE_DATE_EPOCH ]] || …``). Ohne diesen Wert setzt es einen
+        eigenen Zeitstempel, und ein wiederverwendetes Arbeitsverzeichnis
+        friert den alten ein.
+
+        ``LC_ALL`` setzt mkarchiso zwar selbst, aber die von ihm aufgerufenen
+        Werkzeuge starten frueher -- deshalb hier ebenfalls.
+        """
+        env: dict[str, str] = {"LC_ALL": "C.UTF-8", "LANG": "C.UTF-8"}
+        if self.source_date_epoch is not None:
+            env["SOURCE_DATE_EPOCH"] = str(self.source_date_epoch)
+        return env
+
+    def environment(self) -> dict[str, str]:
+        env = dict(os.environ)
+        # mkarchiso setzt LC_ALL selbst, aber nur intern. Hier ebenfalls, damit
+        # auch die Ausgabe der aufgerufenen Werkzeuge englisch und damit
+        # auswertbar bleibt.
+        env["LC_ALL"] = "C.UTF-8"
+        env["LANG"] = "C.UTF-8"
+        if self.source_date_epoch is not None:
+            # mkarchiso schreibt work_dir/build_date und liest es beim naechsten
+            # Lauf zurueck. Ohne festen Wert waere ein wiederverwendetes
+            # Arbeitsverzeichnis in der Zeit eingefroren.
+            env["SOURCE_DATE_EPOCH"] = str(self.source_date_epoch)
+        # Das Ziel darf die Umgebung noch anpassen -- bei WSL etwa den PATH von
+        # Eintraegen befreien, die es nicht abbilden kann.
+        return self.target.sanitize_environment(env)
+
+    # -- Ausfuehren -----------------------------------------------------------
+    def run(
+        self,
+        *,
+        on_line: LineCallback | None = None,
+        on_progress: ProgressCallback | None = None,
+        expected_iso: str = "",
+    ) -> BuildResult:
+        argv = self.build_argv()
+        parser = ProgressParser()
+        lines: list[str] = []
+        started = time.monotonic()
+
+        log.info("Starte: %s", " ".join(argv))
+        self.target.make_dirs(self.out_dir, self.work_dir)
+
+        try:
+            process = subprocess.Popen(
+                argv,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,   # Reihenfolge bleibt so erhalten
+                stdin=subprocess.DEVNULL,   # mkarchiso darf nichts erfragen
+                bufsize=0,
+                shell=False,
+                env=self.environment(),
+                cwd=self.target.cwd(),
+            )
+        except OSError as exc:
+            raise BuildFailed(127, (f"{argv[0]} liess sich nicht starten: {exc}",)) from exc
+
+        self._process = process
+        buffer = b""
+        try:
+            assert process.stdout is not None
+            while True:
+                chunk = process.stdout.read(READ_SIZE)
+                if not chunk:
+                    break
+                buffer += chunk
+                # An \r UND \n trennen; einen unvollstaendigen Rest behalten.
+                buffer, ready = _take_complete(buffer)
+                for raw in ready:
+                    text = raw.decode("utf-8", errors="replace")
+                    lines.append(text)
+                    if on_line is not None:
+                        on_line(text)
+                    state = parser.feed(text)
+                    if on_progress is not None:
+                        on_progress(state)
+        finally:
+            if buffer:
+                text = buffer.decode("utf-8", errors="replace")
+                lines.append(text)
+                if on_line is not None:
+                    on_line(text)
+                parser.feed(text)
+            returncode = process.wait()
+            self._process = None
+
+        duration = time.monotonic() - started
+
+        if self._cancelled.is_set():
+            parser.finish(False)
+            raise BuildCancelled()
+
+        iso_location = self._locate_iso(expected_iso)
+        parser.finish(returncode == 0 and iso_location is not None)
+        if on_progress is not None:
+            on_progress(parser.state)
+
+        result = BuildResult(
+            returncode=returncode,
+            iso_path=None,
+            iso_location=iso_location or "",
+            duration_seconds=duration,
+            lines=lines,
+            errors=parser.errors,
+            warnings=parser.warnings,
+        )
+
+        if returncode != 0:
+            raise BuildFailed(
+                returncode,
+                tuple([summarise_failure(parser.errors)]) if parser.errors else (),
+                stage=parser.state.label,
+            )
+        if iso_location is None:
+            raise BuildFailed(
+                0,
+                (
+                    f"mkarchiso meldet Erfolg, aber im Ausgabeverzeichnis "
+                    f"{self.out_dir} liegt keine ISO-Datei.",
+                ),
+                stage=parser.state.label,
+            )
+        log.info("ISO erzeugt: %s (%.0f s)", iso_location, duration)
+        return result
+
+    def cancel(self) -> None:
+        """Bricht den Lauf ab.
+
+        Erst freundlich (``terminate``), nach einer Schonfrist hart. mkarchiso
+        haengt oft in einem Unterprozess -- pacstrap oder mksquashfs --, der
+        auf ein Signal nicht sofort reagiert.
+        """
+        self._cancelled.set()
+        process = self._process
+        if process is None or process.poll() is not None:
+            return
+        log.info("Abbruch angefordert")
+        try:
+            process.terminate()
+        except OSError:
+            return
+        deadline = time.monotonic() + TERMINATE_GRACE_SECONDS
+        while time.monotonic() < deadline:
+            if process.poll() is not None:
+                return
+            time.sleep(0.2)
+        try:
+            process.kill()
+        except OSError:
+            pass
+
+    @property
+    def cancelled(self) -> bool:
+        return self._cancelled.is_set()
+
+    # -- intern ---------------------------------------------------------------
+    def _locate_iso(self, expected: str) -> str | None:
+        """Den Dateinamen kennen wir selbst -- er folgt aus profiledef.sh.
+
+        Zusaetzlich durchsucht das Ziel sein Ausgabeverzeichnis, falls
+        mkarchiso den Namen anders zusammensetzt als erwartet.
+        """
+        # Bewusst als Text: bei einem Bau in WSL ist das ein Linux-Pfad.
+        return self.target.find_iso(self.out_dir, expected)
+
+
+def _take_complete(buffer: bytes) -> tuple[bytes, list[bytes]]:
+    """Zerlegt den Puffer in vollstaendige Zeilen und einen Rest.
+
+    Getrennt wird an ``\\r`` und ``\\n``. Der Rest bleibt im Puffer, bis das
+    naechste Stueck kommt -- sonst wuerde eine in der Mitte zerschnittene
+    Zeile zweimal auftauchen.
+    """
+    parts: list[bytes] = []
+    start = 0
+    for index, byte in enumerate(buffer):
+        if byte in (0x0A, 0x0D):
+            piece = buffer[start:index]
+            if piece:
+                parts.append(piece)
+            start = index + 1
+    return buffer[start:], parts

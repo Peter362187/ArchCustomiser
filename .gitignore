@@ -1,24 +1,31 @@
 # Programmumgebung -- wird mit "pip install -e ." neu erzeugt.
 # Rund 670 MB und plattformabhaengig; gehoert nie in ein Repository.
-.venv/
-venv/
-env/
+/.venv/
+/venv/
+/env/
 
 # Python
 __pycache__/
 *.py[cod]
 *.egg-info/
-build/
-dist/
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
+
+# ACHTUNG: Diese vier Muster brauchen den fuehrenden Schraegstrich.
+# Ohne ihn trifft "build/" JEDES Verzeichnis dieses Namens in beliebiger
+# Tiefe -- und damit auch src/archcustomiser/core/build/, also das gesamte
+# ISO-Bau-System. Genau das ist beim ersten Commit passiert: neun Quelldateien
+# fehlten im Repository, und die Anwendung liess sich daraus nicht starten.
+/build/
+/dist/
+/out/
+/work/
+
+/.pytest_cache/
+/.mypy_cache/
+/.ruff_cache/
 
 # Ergebnisse und Zwischenstaende des ISO-Baus
 *.iso
 *.tar.gz
-out/
-work/
 *-profil/
 
 # Protokolle
