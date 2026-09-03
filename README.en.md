@@ -3,7 +3,11 @@
 > you can judge whether the project is useful to you; using it comfortably still
 > requires some German.
 
-# ArchCustomiser
+# ArchCustomiser / The Ultimate LARP Tool
+
+If you’re too lazy or too stupid to set up Arch Linux yourself, this is a real goldmine for you.
+This tool lets you create a bootable Arch ISO file that you can easily customize using a nice graphical interface; once you're done, you can finally tell everyone you use Arch Linux, even though you haven't got a clue what you're actually doing.
+You can find a better, more detailed guide here:
 
 A graphical builder for custom Arch Linux based live ISOs.
 
