@@ -1,4 +1,4 @@
-# ArchCustomiser
+# ArchCustomiser / The Ultimate LARP Tool
 
 Grafischer Builder für eigene, auf Arch Linux basierende Live-ISOs.
 
