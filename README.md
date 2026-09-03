@@ -1,3 +1,5 @@
+> **🇬🇧 English:** [README.en.md](README.en.md) — shorter overview; the full documentation is German.
+
 # ArchCustomiser
 
 Grafischer Builder für eigene, auf Arch Linux basierende Live-ISOs.
