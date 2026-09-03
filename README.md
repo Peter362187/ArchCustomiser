@@ -2,7 +2,7 @@
 
 Wenn du zu faul oder zu blöd bist um dir Arch Linux selber einzurichten ist das eine wahre Goldgrube für dich.
 Dieses Tool ermöglicht es dir eine Bootfähige Arch ISO Datei zu erstellen die du schön und einfach mit clicky bunti customisen kannst.
-Eine bessere und genauere Anleiotung gibt es hier:
+Eine bessere und genauere Anleitung gibt es hier:
 
 Grafischer Builder für eigene, auf Arch Linux basierende Live-ISOs.
 
