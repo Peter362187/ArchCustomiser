@@ -223,17 +223,19 @@ Strukturell wichtig: Geheimnisse liegen im `SecretStore`, **nicht** in
 `BuildConfig`. Ein versehentliches `yaml.dump(config)` kann sie damit gar nicht
 erfassen.
 
-Python 3.13 hat das `crypt`-Modul entfernt (PEP 594). Für Phase 6 ist der Weg
-deshalb: `ctypes` gegen `libxcrypt` (yescrypt, kein Subprozess), notfalls
-`openssl passwd -6 -stdin` — Passwort über stdin, **nie** als
-Kommandozeilenargument, weil argv über `/proc/<pid>/cmdline` für jeden lesbar
-ist.
+Python 3.13 hat das `crypt`-Modul entfernt (PEP 594). Umgesetzt sind deshalb
+zwei Stufen: `ctypes` gegen `libxcrypt` (yescrypt, kein Subprozess), sonst die
+eigene sha512crypt-Rechnung in `core/archiso/sha512crypt.py`. Beide brauchen
+kein fremdes Programm — der Klartext verlässt den Prozess nie, und die Frage
+nach argv über `/proc/<pid>/cmdline` stellt sich gar nicht mehr.
+
+Einzelheiten im Abschnitt [Passwort-Hash](#passwort-hash) weiter unten.
 
 ---
 
 ## Tests
 
-438 Tests, ohne Netzwerk und ohne Bildschirm.
+488 Tests, ohne Netzwerk und ohne Bildschirm.
 
 * **`build_fake_syncdb()`** erzeugt echte `tar.gz`-Archive im ALPM-Format, keine
   Attrappen. So fällt eine Formatänderung bei pacman auf.
@@ -402,16 +404,25 @@ Python hat `crypt` in 3.13 entfernt (PEP 594). Die Kaskade in
    yescrypt, also genau das, was `passwd(1)` dort erzeugen würde.
    Bewusst `crypt_rn` statt `crypt`: threadsicher, eigener Puffer, und Fehler
    kommen als `NULL` statt als String mit `*` am Anfang.
-2. **`openssl passwd -6 -stdin`** — Passwort über stdin, **nie** als Argument.
-   argv ist über `/proc/<pid>/cmdline` für jeden Benutzer lesbar.
-3. Kein Hash möglich → Konto gesperrt (`!`), mit deutlichem Hinweis.
+2. **Eigene sha512crypt-Rechnung** (`core/archiso/sha512crypt.py`) — reines
+   `hashlib` nach der SHA-crypt-Spezifikation, gegen deren Testvektoren *und*
+   gegen echtes `openssl passwd -6` geprüft.
+
+Früher stand auf Stufe 2 ein `openssl passwd -6`-Subprozess. Der lieferte
+dasselbe Ergebnis, war aber an ein fremdes Programm gebunden: macOS liefert
+LibreSSL, das den Schalter `-6` gar nicht kennt, und unter Windows gibt es
+openssl nur zufällig über Git for Windows. Wo beides fehlte, wurde das Konto
+**gesperrt** angelegt.
+
+Die eigene Rechnung ist deshalb nicht nur portabler, sondern auch sicherer: der
+Klartext verlässt den Prozess gar nicht mehr. `users.py` importiert `subprocess`
+inzwischen nicht einmal — ein Test hält das fest.
 
 Der Import steht in der Funktion, nicht auf Modulebene: unter Windows gibt es
 libcrypt nicht, das Modul muss aber importierbar bleiben.
 
-Eine Falle am Rande: die Umgebung des Subprozesses wird nur **auf POSIX**
-beschnitten (gegen `LD_PRELOAD` und Verwandte). Unter Windows führt dasselbe
-dazu, dass die Programmdatei ihre Bibliotheken nicht mehr findet.
+`hashing_available()` liefert seither überall `True`; die Funktion bleibt, weil
+die Oberfläche sie abfragt und ein künftiger Zweig sie wieder verneinen könnte.
 
 ### Kernel-Kopplung
 
@@ -606,13 +617,38 @@ Aus demselben Grund liegen Arbeits- und Ausgabeverzeichnis in Linux; erst die
 fertige ISO wird per `cp` nach Windows kopiert. Der Weg über den Netzwerkpfad
 `\wsl$\…` wäre deutlich langsamer.
 
-### `ExecutionTarget`
+### `ExecutionTarget` — wo gebaut wird
 
-`core/build/targets.py` kapselt die drei Stellen, an denen sich lokaler Bau und
-WSL-Bau unterscheiden: wie ein Aufruf zusammengesetzt wird, wie Verzeichnisse
-entstehen, wo die ISO gesucht wird. Ohne diese Trennung müsste der Runner
-Sonderfälle kennen — und die Windows-Variante wäre nicht testbar, ohne WSL zu
-haben.
+`core/build/targets.py` enthält ein Protokoll aus zwölf Methoden, das **alles**
+kapselt, was sich zwischen den Bauwegen unterscheidet: der Aufruf, die
+Verzeichnisse, wie das Profil hinkommt, wie geprüft, aufgeräumt und abgebrochen
+wird. Drei Umsetzungen:
+
+| Ziel | Datei | wann |
+|---|---|---|
+| `LocalTarget` | `targets.py` | Arch mit archiso |
+| `WslExecutionTarget` | `targets.py` + `wsl.py`, `wsl_build.py` | Windows |
+| `ContainerExecutionTarget` | `targets.py` + `container.py` | jedes andere Linux, macOS |
+
+**Der Controller kennt den Zieltyp nicht.** Er fragte früher an drei Stellen per
+`isinstance` und griff viermal auf `target.wsl` durch. Bei zwei Zielen waren das
+drei Sonderfälle, bei einem dritten wären es neun geworden — deshalb wanderten
+`prepare`, `deliver_profile`, `discard`, `preflight` und `cancel_run` ins
+Protokoll. Ein Test in `tests/test_targets.py` hält fest, dass keine
+`isinstance`-Abfrage zurückkehrt.
+
+**`available_targets()`** wählt nach Fähigkeit, nicht nach `sys.platform`. Der
+Benutzer wählt nichts; er sieht einen Satz, welcher Weg genommen wird.
+
+**Zum Container:** er läuft mit `--privileged` — nicht wegen mkarchiso, sondern
+wegen `pacstrap`, dessen `chroot_setup` acht Dateisysteme einhängt und
+`CAP_SYS_ADMIN` braucht. Rootless scheitert an `devtmpfs`, das im Kernel kein
+`FS_USERNS_MOUNT`-Flag hat. Beim Bind-Mount sind Host- und Containerpfad
+identisch, weshalb mehrere Methoden wörtlich die von `LocalTarget` sind.
+
+**Abbrechen** muss jedes Ziel selbst: `wsl.exe` leitet keine Signale weiter, ein
+`terminate()` tötet nur den Windows-Client, während mkarchiso drüben
+weiterläuft. Bei podman träfe es den Client statt des Containers.
 
 **Achtung bei Pfaden:** Im WSL-Fall sind alle Pfade Linux-Pfade und dürfen
 nicht durch `pathlib.Path` laufen. Unter Windows würde aus `/home/jason` sonst

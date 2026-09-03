@@ -260,7 +260,14 @@ def _umgebung_ohne(*fehlende: str):
     for name, paket, zweck in CONDITIONAL_TOOLS.values():
         tools.append(Tool(name, paket, zweck, False, None if name in fehlende else f"/usr/bin/{name}"))
     return Environment(
-        platform="linux", can_build=True, tools=tuple(tools), privilege_mode="rootless"
+        platform="linux",
+        can_build=True,
+        tools=tuple(tools),
+        privilege_mode="rootless",
+        # Ohne pacman gilt das System als "hier grundsaetzlich nicht baubar" und
+        # die Vorabpruefung bricht vorher ab -- diese Umgebung soll aber ein
+        # Arch-System nachbilden, dem einzelne Werkzeuge fehlen.
+        pacman_available="pacman" not in fehlende,
     )
 
 

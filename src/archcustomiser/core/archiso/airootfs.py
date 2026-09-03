@@ -226,9 +226,12 @@ def _password_hash(tree: ProfileTree, secrets: SecretStore | None) -> str:
         # Kein Abbruch: das Profil ist auch ohne Hash brauchbar, und auf dem
         # Arch-System laesst sich das Passwort nachtragen.
         log.warning("Passwort-Hash nicht moeglich: %s", exc.technical)
+        # Der Text nannte frueher libcrypt und openssl als Voraussetzung. Seit
+        # die Kaskade eine eigene sha512crypt-Rechnung enthaelt, braucht sie
+        # weder das eine noch das andere -- der Fall tritt praktisch nur noch
+        # bei einem leeren Passwort ein.
         tree.note(
-            "Auf diesem Rechner konnte kein Passwort-Hash erzeugt werden "
-            "(dafuer werden libcrypt oder openssl gebraucht). Das Konto wird "
+            "Der Passwort-Hash liess sich nicht erzeugen. Das Konto wird "
             "gesperrt angelegt -- das Passwort laesst sich im laufenden System "
             "mit 'passwd' setzen."
         )

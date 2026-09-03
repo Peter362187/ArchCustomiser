@@ -181,7 +181,6 @@ class WslSetupDialog(QDialog):
             f"archiso wird in {ziel} installiert ...\n\n"
             "Es werden einige hundert MB geladen; das dauert ein paar "
             "Minuten.",
-            f"Es werden einige hundert MB geladen; das dauert ein paar Minuten.",
             parent=self,
             cancellable=False,
         )

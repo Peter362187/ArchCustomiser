@@ -23,6 +23,10 @@ from .index import RepoIndex
 from .models import BackendCapabilities, CachePolicy, IndexMetadata, PackageInfo
 
 DEFAULT_REPOS: tuple[str, ...] = ("core", "extra", "multilib")
+# ACHTUNG: Dieser Spiegel fuehrt ausschliesslich x86_64. Arch Linux ARM ist
+# ein eigenes Projekt mit eigenen Servern UND einem anderen Pfadschema
+# ($arch/$repo statt $repo/os/$arch) -- ein anderer arch-Wert allein
+# ergaebe hier also 404, keine ARM-Pakete.
 DEFAULT_MIRROR = "https://geo.mirror.pkgbuild.com/$repo/os/$arch"
 
 ProgressCallback = Callable[[str, float], None]

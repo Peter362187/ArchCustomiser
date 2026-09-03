@@ -56,8 +56,9 @@ class WslNotAvailable(WslError):
     def __init__(self, technical: str = "") -> None:
         super().__init__(
             "Auf diesem Rechner ist das Windows-Subsystem fuer Linux nicht "
-            "eingerichtet. Es wird gebraucht, weil eine Arch-ISO nur unter Linux "
-            "zusammengebaut werden kann.",
+            "eingerichtet. Es wird gebraucht, weil eine Arch-ISO nur mit "
+            "archiso zusammengebaut werden kann -- und das gibt es nur unter "
+            "Arch Linux.",
             technical,
         )
 
@@ -395,7 +396,7 @@ class WslTarget:
         text = result.stdout.strip()
         if not result.ok or not text:
             raise WslError(
-                f"Das Heimatverzeichnis in {self.name!r} liess sich nicht "
+                f"Das Heimatverzeichnis in {self.distribution!r} liess sich nicht "
                 f"ermitteln. Laeuft die Verteilung?",
                 result.stderr.strip() or f"Rueckgabewert {result.returncode}",
             )

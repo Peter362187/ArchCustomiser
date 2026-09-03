@@ -26,13 +26,13 @@ pacman, nicht dieses Programm.
 | 6 | ISO-Build ausführen (`mkarchiso` starten) | fertig |
 | 7 | Logging und Fehlerbehandlung | fertig |
 | 8 | Branding | fertig |
-| 9 | Tests | laufend (438) |
+| 9 | Tests | laufend (488) |
 | 10 | UI/UX und Dokumentation | laufend |
 
 **Der Funktionsumfang ist vollständig:** Wizard, Profile, Paketprüfung, Dry-Run,
 Profilerzeugung und der ISO-Build mit Fortschrittsanzeige, Abbruch und Protokoll.
 
-**Eine echte ISO wurde gebaut.** Der vollständige Ablauf ist über die
+**Zwei echte ISOs wurden gebaut** (1311 MB und 2525 MB). Der vollständige Ablauf ist über die
 Programmschnittstelle durchlaufen worden — Profil erzeugen, in eine
 WSL-Arch-Verteilung übertragen, `mkarchiso` ausführen, ISO zurückholen:
 
@@ -58,6 +58,50 @@ virtuellen Maschine.
 
 Konfiguration, Profile, Paketprüfung und Dry-Run funktionieren unter Windows,
 macOS und Linux gleichermaßen.
+
+### Systempakete für die Oberfläche (nur schlanke Linux-Systeme)
+
+PySide6 bringt Qt mit, aber nicht dessen Systembibliotheken. Auf einem frisch
+aufgesetzten Ubuntu, Debian oder Fedora bricht der Start sonst mit
+`Could not load the Qt platform plugin "xcb"` ab. Einmalig:
+
+```bash
+sudo apt install libgl1 libegl1 libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 libdbus-1-3 fontconfig
+```
+
+```bash
+sudo dnf install mesa-libGL libxkbcommon-x11 xcb-util-cursor xcb-util-wm xcb-util-keysyms
+```
+
+Unter Arch bringt `qt6-base` das ohnehin mit, unter Windows und macOS ist
+nichts nötig.
+
+---
+
+## Wie die ISO gebaut wird
+
+`archiso` gibt es **nur unter Arch Linux** — Debian, Ubuntu, Fedora und
+openSUSE paketieren es nicht. Das Programm löst das nicht, indem es das
+Zielsystem arch-fähig macht, sondern indem es ein Arch *danebenstellt*. Es
+erkennt selbst, welcher Weg auf diesem Rechner möglich ist:
+
+| System | Weg | Einmalig einzurichten |
+|---|---|---|
+| Arch Linux | direkt | `sudo pacman -S --needed archiso` |
+| Windows | WSL-Verteilung | `wsl --install archlinux`, Neustart, dann `pacman -S archiso` |
+| Ubuntu, Fedora, Debian, Mint | Container | `sudo apt install podman` (Fedora hat es schon) |
+| macOS | Container | Docker Desktop |
+| sonst | Profil exportieren | nichts — auf einem Arch-System bauen |
+
+**Du wählst nichts.** Das Programm prüft beim Klick auf „ISO erstellen", was da
+ist, nimmt den besten Weg und sagt in einem Satz, welchen. Geht keiner, bietet
+es den Profil-Export an statt eines ausgegrauten Knopfes.
+
+**Zum Container, offen gesagt:** er läuft mit `--privileged`. Nicht wegen
+`mkarchiso`, sondern wegen `pacstrap` — das hängt acht Dateisysteme in den
+Zielbaum ein und braucht dafür `CAP_SYS_ADMIN`. Ein Weg ohne diese Rechte
+existiert nicht: `devtmpfs` lässt sich in einem User-Namespace grundsätzlich
+nicht einhängen. Arch baut seine eigenen ISOs genauso.
 
 ### Zum Bauen einer ISO unter Windows
 
@@ -192,7 +236,7 @@ python -m archcustomiser --dry-run src/archcustomiser/profiles/gaming.yaml
 python -m archcustomiser --export-profile src/archcustomiser/profiles/gaming.yaml --out ~/flos-profil.tar.gz
 ```
 
-Der Wizard führt durch dreizehn Schritte. Seiten, die nicht zutreffen, werden
+Der Wizard führt durch eine Startseite und vierzehn Schritte. Seiten, die nicht zutreffen, werden
 übersprungen — ohne Desktop und ohne Window Manager erscheint zum Beispiel die
 Treiberseite gar nicht erst.
 
@@ -220,7 +264,12 @@ Warum der Umweg über ein Archiv: Unter `/mnt/c` liegt ein Windows-Dateisystem
 ohne symbolische Verknüpfungen — und ein archiso-Profil besteht zu einem
 Drittel daraus. Direkt dorthin geschrieben bräche der Build ab.
 
-**Auf jedem anderen System** bietet das Programm den Profilexport an — als
+**Auf jedem anderen Linux und auf macOS** baut das Programm in einem
+Container mit dem `archlinux`-Abbild — derselbe Gedanke wie bei WSL, nur
+heißt der Nachbar hier podman oder docker. Der volle Funktionsumfang
+bleibt erhalten, weil pacman im Container läuft.
+
+**Geht keiner dieser Wege**, bietet das Programm den Profilexport an — als
 `.tar.gz` oder als Ordner.
 
 Danach auf einem Arch-System:
@@ -354,9 +403,11 @@ dagegen der Zusatz „based on Arch Linux".
 
 ## Fehlerbehebung
 
-**„Ein ISO-Build ist nur unter Linux möglich"**
-Erwartet, wenn nicht unter Arch gearbeitet wird. Alles außer dem Build
-funktioniert trotzdem vollständig.
+**„Direkt auf diesem System kann nicht gebaut werden"**
+Kein Fehler, sondern eine Einordnung: dieser Rechner ist kein Arch-System.
+Das Programm sucht sich dann selbst einen Weg — eine WSL-Verteilung unter
+Windows, sonst einen Container. Findet es keinen, sagt es, was fehlt und
+was dagegen hilft, und bietet den Profilexport an.
 
 **„Die Paketdaten sind X Tage alt"**
 Auf der Paketseite „Paketdaten aktualisieren" anklicken. Die Anzeige nennt den
@@ -380,10 +431,19 @@ Der Name ist ein virtuelles Paket mit mehreren Anbietern. pacman würde hier
 nachfragen — `mkarchiso` läuft aber ohne Rückfrage und würde abbrechen. Deshalb
 muss der Anbieter vorher feststehen.
 
-**Logdatei**
-Linux: `~/.local/state/archcustomiser/archcustomiser.log`
-%LOCALAPPDATA%\ArchCustomiser\State\archcustomiser.log
-Passwörter und Passwort-Hashes werden dort maskiert.
+**Logdatei** — je System dort, wo man sie erwartet:
+
+| System | Pfad |
+|---|---|
+| Linux | `~/.local/state/archcustomiser/archcustomiser.log` |
+| Windows | `%LOCALAPPDATA%\ArchCustomiser\State\archcustomiser.log` |
+| macOS | `~/Library/Logs/ArchCustomiser/archcustomiser.log` |
+
+Auf macOS bewusst nicht `~/.local/state`: Punkt-Verzeichnisse sind im Finder
+unsichtbar, und wer sein Protokoll an eine Fehlermeldung hängen soll, findet es
+dort nicht.
+
+Passwörter und Passwort-Hashes werden in der Datei maskiert.
 
 ---
 
@@ -398,7 +458,7 @@ src/archcustomiser/
 │   ├── resolver.py          Auflösung zu Paketen, Diensten, Dateien
 │   ├── profiles.py          Speichern, Laden, Migrieren
 │   ├── archiso/             Profilerzeugung: Baum, Ausgabewege, Bootloader
-│   ├── build/               ISO-Bau: mkarchiso, Fortschritt, WSL-Anbindung
+│   ├── build/               ISO-Bau: drei Bauwege (lokal, WSL, Container)
 │   ├── plan.py              Bauplan und archinstall-Konfiguration
 │   ├── validation.py        Feldprüfungen
 │   ├── environment.py       Werkzeug- und Rechteerkennung
@@ -411,7 +471,7 @@ src/archcustomiser/
 ├── data/catalog/            der gesamte Optionsumfang als YAML
 └── profiles/                mitgelieferte Profile
 
-tests/                       438 Tests, ohne Netz und ohne Bildschirm
+tests/                       488 Tests, ohne Netz und ohne Bildschirm
 tools/                       Hilfsskripte für die Entwicklung
 ArchCustomiser.bat           Doppelklick-Start, richtet sich selbst ein
 ```
@@ -455,3 +515,22 @@ Zusätzliche Tests gegen die echten Arch-Server; standardmäßig abgewählt.
 
 Dieses Projekt ist nicht mit dem Arch-Linux-Projekt verbunden und wird nicht von
 ihm unterstützt. „Arch Linux" ist eine Marke des Arch-Linux-Projekts.
+
+---
+
+## Was geprüft ist und was nicht
+
+Diese Trennung gehört in die Dokumentation, nicht ins Kleingedruckte:
+
+| | Zustand |
+|---|---|
+| Oberfläche unter Windows | im Gebrauch |
+| ISO-Bau über WSL | **zwei echte ISOs gebaut**, 1311 MB und 2525 MB |
+| Profil-Erzeugung und Export | durch Tests und im Gebrauch belegt |
+| ISO-Bau direkt auf Arch | durch Tests belegt, nicht auf echter Hardware gelaufen |
+| **ISO-Bau im Container** | **Aufrufe durch Tests belegt, aber noch auf keinem echten Ubuntu, Fedora oder Mac gelaufen** |
+| Boot-Test der fertigen ISO | steht aus |
+
+Der Container-Weg ist sorgfältig gebaut und folgt dem, was Arch für seine
+eigenen ISOs tut — aber „sollte funktionieren" ist nicht dasselbe wie
+„funktioniert". Wer ihn auf einem echten System ausprobiert, möge berichten.

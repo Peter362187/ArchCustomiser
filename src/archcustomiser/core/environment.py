@@ -63,11 +63,25 @@ class Environment:
         return tuple(tool for tool in self.tools if tool.required and not tool.found)
 
     def install_hint(self) -> str:
-        """Ein fertiger pacman-Befehl fuer alles, was fehlt."""
+        """Was der Benutzer tun kann -- oder eine ehrliche Auskunft.
+
+        Frueher stand hier bedingungslos ein pacman-Befehl. Auf Ubuntu oder
+        Fedora lautete die Empfehlung damit sinngemaess "installiere pacman mit
+        pacman" -- ein Befehl, der genau daran scheitert, dass pacman fehlt.
+        Das Feld ``pacman_available`` unterscheidet den Fall seit jeher; es
+        wurde nur nirgends gelesen.
+        """
         packages = sorted({tool.package for tool in self.missing_required})
         if not packages:
             return ""
-        return "sudo pacman -S --needed " + " ".join(packages)
+        if self.pacman_available:
+            return "sudo pacman -S --needed " + " ".join(packages)
+        return (
+            "Diese Werkzeuge stammen aus Arch Linux und stehen auf dieser "
+            "Verteilung nicht zur Verfuegung. Es gibt zwei Wege: den Bau in "
+            "einem Container mit dem archlinux-Abbild, oder das erzeugte Profil "
+            "auf ein Arch-System uebertragen und dort bauen."
+        )
 
     def summary(self) -> str:
         if self.can_build:
@@ -153,12 +167,19 @@ def detect_environment() -> Environment:
             can_build=False,
             tools=(),
             problems=(
-                "Ein ISO-Build ist nur unter Linux moeglich, weil archiso, pacman "
-                "und mkarchiso Linux-Werkzeuge sind.",
+                "Direkt auf diesem System kann nicht gebaut werden -- archiso, "
+                "pacman und mkarchiso sind Linux-Werkzeuge.",
             ),
             hints=(
-                "Konfiguration, Profile, Paketpruefung und Dry-Run funktionieren hier "
-                "vollstaendig -- nur der eigentliche Build braucht ein Arch-System.",
+                # Frueher stand hier "nur unter Linux moeglich". Seit es das
+                # Container-Ziel gibt, ist das schlicht falsch: unter macOS baut
+                # das Programm in einem Container. Dieser Text erscheint als
+                # Statuszeile auf der Startseite -- er darf niemanden davon
+                # abhalten, es zu versuchen.
+                "Das Programm sucht sich beim Bauen selbst einen Weg -- unter "
+                "macOS etwa einen Container mit dem archlinux-Abbild. "
+                "Zusammenstellen, Profile und Paketpruefung funktionieren hier "
+                "ohnehin vollstaendig.",
             ),
             privilege_mode="unavailable",
         )

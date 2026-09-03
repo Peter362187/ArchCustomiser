@@ -29,13 +29,12 @@ from __future__ import annotations
 
 import logging
 import os
-import shutil
-import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from ..secrets import Secret
 from .errors import HashingUnavailable
+from .sha512crypt import generate_salt, sha512_crypt
 
 log = logging.getLogger(__name__)
 
@@ -210,46 +209,12 @@ def _hash_via_libcrypt(password: str) -> str | None:
     return None
 
 
-def _hash_via_openssl(password: str) -> str | None:
-    """Rueckfallebene: openssl.
-
-    Das Passwort geht ueber **stdin**, niemals als Argument. openssl beherrscht
-    kein yescrypt, liefert also sha512crypt -- von glibc voll unterstuetzt.
-    """
-    executable = shutil.which("openssl")
-    if executable is None:
-        return None
-
-    # Auf POSIX wird die Umgebung bewusst beschnitten: Variablen wie LD_PRELOAD
-    # oder OPENSSL_CONF koennen das Verhalten eines Prozesses veraendern.
-    # Unter Windows fuehrt dasselbe Vorgehen dazu, dass die Programmdatei ihre
-    # Bibliotheken nicht mehr findet -- dort wird die Umgebung geerbt.
-    env: dict[str, str] | None = None
-    if os.name != "nt":
-        env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "LC_ALL": "C"}
-
-    try:
-        result = subprocess.run(
-            [executable, "passwd", "-6", "-stdin"],
-            input=password,
-            capture_output=True,
-            text=True,
-            timeout=15,
-            check=False,
-            shell=False,
-            env=env,
-        )
-    except (OSError, subprocess.SubprocessError) as exc:
-        log.debug("openssl passwd fehlgeschlagen: %s", exc)
-        return None
-    if result.returncode != 0:
-        return None
-    candidate = result.stdout.strip()
-    return candidate if candidate.startswith("$6$") else None
-
-
 def hash_password(password: Secret | str) -> str:
-    """Erzeugt einen crypt(3)-Hash. Wirft ``HashingUnavailable``, wenn nichts geht.
+    """Erzeugt einen crypt(3)-Hash.
+
+    Zwei Stufen: yescrypt ueber libcrypt, wo es das gibt -- sonst die eigene
+    sha512crypt-Rechnung, die ueberall laeuft. ``HashingUnavailable`` kommt
+    deshalb nur noch bei einem leeren Passwort.
 
     Der Klartext wird nur innerhalb dieser Funktion ausgepackt und nirgends
     protokolliert.
@@ -258,32 +223,37 @@ def hash_password(password: Secret | str) -> str:
     if not plain:
         raise HashingUnavailable("leeres Passwort")
 
-    for attempt in (_hash_via_libcrypt, _hash_via_openssl):
-        try:
-            result = attempt(plain)
-        except Exception:
-            log.debug("Hash-Verfahren %s fehlgeschlagen", attempt.__name__, exc_info=True)
-            result = None
-        if result:
-            return result
+    # libcrypt zuerst: es liefert yescrypt, das Verfahren, das Arch selbst
+    # voreingestellt hat und das staerker ist als sha512crypt.
+    try:
+        result = _hash_via_libcrypt(plain)
+    except Exception:
+        log.debug("libcrypt fehlgeschlagen", exc_info=True)
+        result = None
+    if result:
+        return result
 
-    raise HashingUnavailable(
-        "weder libcrypt noch openssl verfuegbar (unter Windows zu erwarten)"
-    )
+    # Sonst die eigene Rechnung. Sie kann nicht fehlschlagen -- reines hashlib,
+    # kein Fremdprogramm, keine Bibliothek. Damit funktioniert das Passwortfeld
+    # auf Linux, Windows und macOS gleichermassen.
+    #
+    # Frueher stand hier "openssl passwd -6". Das lieferte dasselbe Ergebnis
+    # (gegen das echte openssl nachgeprueft), brauchte dafuer aber einen
+    # Subprozess und schickte den Klartext durch dessen stdin. Auf macOS lief es
+    # ohnehin nie: LibreSSL kennt den Schalter -6 gar nicht.
+    return sha512_crypt(plain, generate_salt())
 
 
 def hashing_available() -> bool:
-    """Ob auf diesem System tatsaechlich gehasht werden kann.
+    """Ob auf diesem System gehasht werden kann.
 
-    Bewusst ein echter Probelauf und keine blosse Suche im PATH: ein
-    vorhandenes ``openssl`` heisst noch nicht, dass es sich aufrufen laesst.
-    Waere die Antwort hier optimistischer als die Wirklichkeit, wuerde die
-    Oberflaeche ein Passwortfeld anbieten, das beim Erzeugen stillschweigend
-    wirkungslos bliebe.
+    Seit die Kaskade eine eigene sha512crypt-Rechnung enthaelt, ist die Antwort
+    ueberall ja. Die Funktion bleibt trotzdem: die Oberflaeche fragt sie ab, und
+    ein kuenftiger Zweig koennte sie wieder verneinen.
 
-    Die Pruefung laeuft nur auf Anfrage, nicht beim Import -- unter Windows
-    muss das Modul importierbar bleiben, obwohl dort meist nichts davon
-    vorhanden ist.
+    Vorher hing die Antwort davon ab, ob zufaellig ``libcrypt`` oder ein echtes
+    ``openssl`` zur Hand war. Wo beides fehlte -- auf macOS immer, unter Windows
+    ohne Git for Windows --, wurde das Benutzerkonto gesperrt angelegt.
     """
     try:
         return bool(hash_password("probe"))

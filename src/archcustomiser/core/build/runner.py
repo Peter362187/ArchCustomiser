@@ -1,6 +1,8 @@
 """Startet ``mkarchiso`` und liest seine Ausgabe mit.
 
-Die einzige Stelle des Programms, die einen langlaufenden Prozess startet.
+Die Stelle, die mkarchiso startet -- den einzigen Prozess, dessen
+Fortschritt mitgelesen werden muss. (Das einmalige Bauen des
+Container-Abbilds laeuft ueber ``core/build/container.py``.)
 
 Vier Dinge, die hier bewusst so und nicht anders gemacht sind:
 
@@ -291,40 +293,18 @@ class MkarchisoRunner:
         return result
 
     def cancel(self) -> None:
-        """Bricht den Lauf ab.
+        """Bricht den Lauf ab -- ueber das Ziel, nicht am Ziel vorbei.
 
-        Erst freundlich (``terminate``), nach einer Schonfrist hart. mkarchiso
-        haengt oft in einem Unterprozess -- pacstrap oder mksquashfs --, der
-        auf ein Signal nicht sofort reagiert.
+        Frueher stand hier terminate/kill auf dem lokalen Prozess. Das ist nur
+        lokal richtig: ``wsl.exe`` leitet keine Signale weiter, und bei einem
+        Container traefe es den Client statt des Containers. Der Bau lief in
+        beiden Faellen weiter, waehrend die Oberflaeche "abgebrochen" meldete.
         """
         self._cancelled.set()
         with self._lock:
             process = self._process
-        if process is None or process.poll() is not None:
-            return
         log.info("Abbruch angefordert")
-        try:
-            process.terminate()
-        except OSError:
-            return
-        # wait() mit Frist statt einer Schleife aus poll() und sleep():
-        # das Betriebssystem weckt uns, sobald der Prozess wirklich weg ist,
-        # statt fuenfmal je Sekunde nachzusehen.
-        try:
-            process.wait(timeout=TERMINATE_GRACE_SECONDS)
-            return
-        except subprocess.TimeoutExpired:
-            pass
-        log.warning(
-            "mkarchiso hat nach %.0f s nicht reagiert -- wird hart beendet. "
-            "Unterprozesse wie pacstrap oder mksquashfs nehmen ein Signal "
-            "nicht immer sofort an.",
-            TERMINATE_GRACE_SECONDS,
-        )
-        try:
-            process.kill()
-        except OSError:
-            pass
+        self.target.cancel_run(process, grace_seconds=TERMINATE_GRACE_SECONDS)
 
     @property
     def cancelled(self) -> bool:

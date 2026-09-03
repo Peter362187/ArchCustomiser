@@ -261,3 +261,44 @@ def test_summary_produces_a_plan(wizard, store) -> None:
     assert plan is not None
     assert plan.iso_filename.endswith(".iso")
     assert plan.archinstall["profile_config"]["profile"]["details"] == ["KDE Plasma"]
+
+
+# ---------------------------------------------------------------------------
+# Die Knoepfe muessen tatsaechlich aufrufbar sein
+# ---------------------------------------------------------------------------
+
+
+def test_every_button_signature_actually_matches(qapp, monkeypatch) -> None:
+    """Ein Knopf, den kein Test drueckt, kann jahrelang kaputt sein.
+
+    Genau das war der Fall: der Knopf "archiso jetzt installieren" im WSL-Dialog
+    uebergab drei Argumente an run_with_wait, das nur zwei annimmt -- ein
+    TypeError beim ersten Klick. Kein Test hat ihn je gedrueckt.
+    """
+    from archcustomiser.core.build import wsl
+    from archcustomiser.gui.widgets import wsl_dialog as modul
+
+    aufgerufen: list[str] = []
+
+    def fake_run_with_wait(arbeit, text, *, parent=None, cancellable=True):
+        # Signatur wie das Original -- ein zusaetzliches Argument wuerde hier
+        # denselben TypeError ausloesen wie in der echten Fassung.
+        aufgerufen.append(text)
+        return None, None
+
+    monkeypatch.setattr(
+        "archcustomiser.gui.widgets.wait_dialog.run_with_wait", fake_run_with_wait
+    )
+
+    status = wsl.WslStatus(
+        installed=True, distributions=(wsl.Distribution("archlinux", default=True),)
+    )
+    dialog = modul.WslSetupDialog(status)
+
+    dialog._install_archiso()
+    assert aufgerufen, "der Installationsknopf hat run_with_wait nie erreicht"
+    assert "archiso" in aufgerufen[0]
+
+    aufgerufen.clear()
+    dialog._recheck()
+    assert aufgerufen, "der Knopf 'Erneut pruefen' hat run_with_wait nie erreicht"

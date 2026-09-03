@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..core.catalog import Catalog, Category
+from ..core.build.preflight import NOT_BUILDABLE_HERE
 from ..core.environment import Environment
 from ..core.paths import ensure_dir, user_profiles_dir
 from ..core.plan import plan_as_text
@@ -51,8 +52,13 @@ from .widgets.export_dialog import ErrorDialog, ExportResultDialog
 from .widgets.preflight_dialog import PreflightDialog
 from .widgets.step_sidebar import StepSidebar, StepState
 from .widgets.wsl_dialog import WslSetupDialog
+from .widgets.common import passende_mindestgroesse
 
 log = logging.getLogger(__name__)
+
+# None bedeutet 'lokal bauen' -- fuer 'der Benutzer hat abgebrochen'
+# braucht es deshalb ein eigenes Zeichen.
+_ABGEBROCHEN = object()
 
 
 class BuildWizard(QWizard):
@@ -92,7 +98,11 @@ class BuildWizard(QWizard):
         self.setButtonText(QWizard.WizardButton.BackButton, "< &Zurueck")
         self.setButtonText(QWizard.WizardButton.CancelButton, "&Beenden")
         self.setButtonText(QWizard.WizardButton.FinishButton, "&ISO erstellen")
-        self.setMinimumSize(1000, 720)
+        # Aus dem tatsaechlich verfuegbaren Bildschirm ableiten statt fest
+        # vorzugeben: bei 1920x1080 und 150 % Skalierung bleiben logisch
+        # nur 1280x720 -- eine feste Mindesthoehe von 720 waere dann genau
+        # die volle Bildschirmhoehe, ohne Platz fuer die Taskleiste.
+        self.setMinimumSize(*passende_mindestgroesse(1000, 720))
 
         self.customButtonClicked.connect(self._on_custom_button)
 
@@ -431,9 +441,8 @@ class BuildWizard(QWizard):
         antwort = QMessageBox.question(
             self,
             "ArchCustomiser beenden",
-            "Die Zusammenstellung ist noch nicht gespeichert."
-            + chr(10) + chr(10)
-            + "Als Profil speichern, um sie spaeter weiterzuverwenden?",
+            "Die Zusammenstellung ist noch nicht gespeichert.\n\n"
+            "Als Profil speichern, um sie spaeter weiterzuverwenden?",
             QMessageBox.StandardButton.Save
             | QMessageBox.StandardButton.Discard
             | QMessageBox.StandardButton.Cancel,
@@ -474,11 +483,14 @@ class BuildWizard(QWizard):
     def accept(self) -> None:
         """'ISO erstellen'.
 
-        Unter Linux laeuft der Bau direkt. Unter Windows kann er nicht direkt
-        laufen -- archiso und pacman gibt es dort nicht. Statt einer
-        Fehlermeldung fuehrt das Programm dann durch die Einrichtung eines
-        Linux-Untersystems und baut anschliessend dort; die fertige ISO landet
-        wieder im Windows-Ordner.
+        Gebaut wird auf dem Weg, den dieser Rechner hergibt: direkt auf einem
+        Arch-System, in einer Arch-Verteilung unter WSL, oder in einem Container
+        mit dem archlinux-Abbild. Welcher es ist, entscheidet
+        ``available_targets()`` -- nicht die Plattform, sondern was tatsaechlich
+        vorliegt.
+
+        Geht keiner davon, gibt es statt einer Fehlermeldung den Profil-Export:
+        das Ergebnis laesst sich dann auf einem Arch-System bauen.
         """
         import sys as _sys
 
@@ -487,13 +499,93 @@ class BuildWizard(QWizard):
         if plan is not None:
             log.info("Bauplan:\n%s", plan_as_text(plan))
 
-        target = None
-        if _sys.platform != "linux":
-            target = self._choose_wsl_target()
-            if target is None:
-                return
-
+        target = self._choose_target()
+        if target is _ABGEBROCHEN:
+            return
         self._start_build(target)
+
+    def _choose_target(self):
+        """Sucht den besten Bauweg fuer diesen Rechner.
+
+        Frueher entschied hier ``sys.platform``: alles ausser Linux ging in den
+        WSL-Dialog. Ein Mac-Benutzer las daraufhin zwei Bildschirme lang, er
+        solle "wsl --install archlinux" ausfuehren und Windows neu starten.
+
+        Die Frage ist aber nicht "welches Betriebssystem", sondern "was liegt
+        hier vor": ein Arch mit archiso, eine WSL-Verteilung, eine
+        Container-Umgebung -- oder nichts davon. Der Benutzer waehlt nichts, er
+        bekommt den besten Weg und einen Satz dazu.
+
+        Die Suche laeuft im Hintergrund: ``wsl.exe`` antwortet je nach Zustand
+        der Verteilung erst nach einer Minute, und auch ``podman info`` braucht
+        einen Moment. Frueher stand das Fenster solange still und wurde von
+        Windows als "keine Rueckmeldung" markiert.
+        """
+        from ..core.build.targets import available_targets
+        from .widgets.wait_dialog import run_with_wait
+
+        optionen, fehler = run_with_wait(
+            available_targets,
+            "Bauumgebung wird geprueft ...\n\n"
+            "Das kann einen Moment dauern, wenn ein Linux-Untersystem "
+            "oder eine Container-Umgebung erst starten muss.",
+            parent=self,
+        )
+        if fehler is not None:
+            QMessageBox.warning(
+                self,
+                "Bauumgebung nicht pruefbar",
+                "Die Pruefung ist fehlgeschlagen:\n\n" + str(fehler),
+
+            )
+            return _ABGEBROCHEN
+        if optionen is None:
+            return _ABGEBROCHEN          # vom Benutzer abgebrochen
+
+        brauchbar = [option for option in optionen if option.usable]
+        if brauchbar:
+            gewaehlt = brauchbar[0]
+            log.info("Bauweg: %s -- %s", gewaehlt.kind, gewaehlt.label)
+            self._build_note = gewaehlt.label
+            # Der lokale Weg braucht kein Ziel-Objekt: der Controller nimmt
+            # dann seinen Vorgabewert.
+            return None if gewaehlt.kind == "lokal" else gewaehlt.target
+
+        return self._offer_setup(optionen)
+
+    def _offer_setup(self, optionen) -> object:
+        """Kein Weg vorhanden -- fuehren statt stehenlassen.
+
+        Unter Windows gibt es den eingerichteten WSL-Dialog. Sonst wird
+        aufgezaehlt, was fehlt und was dagegen hilft, mit dem Profil-Export als
+        immer moeglichem Ausweg.
+        """
+        import sys as _sys
+
+        if _sys.platform == "win32":
+            return self._choose_wsl_target()
+
+        zeilen = []
+        for option in optionen:
+            zeilen.append(f"• {option.label}")
+            if option.problem:
+                zeilen.append(f"    {option.problem}")
+            if option.remedy:
+                zeilen.append(f"    Abhilfe: {option.remedy}")
+
+        antwort = QMessageBox.question(
+            self,
+            "Hier kann nicht gebaut werden",
+            "Auf diesem Rechner gibt es keinen Weg, die ISO zu bauen:\n\n"
+            + "\n".join(zeilen)
+            + "\n\nDas fertige archiso-Profil laesst sich aber jetzt schon "
+            "speichern und auf einem Arch-System bauen.\n\nProfil exportieren?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if antwort == QMessageBox.StandardButton.Yes:
+            self._export(as_archive=True)
+        return _ABGEBROCHEN
 
     def _choose_wsl_target(self):
         """Sucht eine Arch-Verteilung in WSL oder fuehrt zur Einrichtung.
@@ -576,11 +668,20 @@ class BuildWizard(QWizard):
 
     @staticmethod
     def _can_build_here(report) -> bool:
-        """Ob die Beanstandungen behebbar sind oder grundsaetzlicher Natur."""
-        return not any(check.name == "Betriebssystem" for check in report.blocking)
+        """Ob die Beanstandungen behebbar sind oder grundsaetzlicher Natur.
+
+        Frueher wurde hier auf den Prueftext "Betriebssystem" verglichen, den es
+        nur bei einem Nicht-Linux gab. Auf Ubuntu ist die Plattform aber "linux",
+        der Vergleich schlug also nie an -- und der freundliche Vorschlag "Profil
+        stattdessen exportieren" wurde ausgerechnet dort nie ausgeloest, wo er
+        gebraucht wird. Die Vorabpruefung kennzeichnet solche Faelle jetzt selbst.
+        """
+        return not any(
+            check.name == NOT_BUILDABLE_HERE for check in report.blocking
+        )
 
     def _offer_profile_export(self, report) -> None:
-        """Auf Nicht-Linux-Systemen den sinnvollen Weg anbieten.
+        """Wo grundsaetzlich nicht gebaut werden kann, den sinnvollen Weg anbieten.
 
         Einen Fehler zu melden und den Benutzer stehen zu lassen waere unnoetig:
         das Profil ist fertig, es fehlt nur die Maschine, die daraus baut.

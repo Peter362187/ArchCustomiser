@@ -1,4 +1,6 @@
-"""Plattformabhängige Verzeichnisse (XDG unter Linux, LOCALAPPDATA unter Windows).
+"""Plattformabhängige Verzeichnisse.
+
+XDG unter Linux, LOCALAPPDATA unter Windows, ~/Library unter macOS.
 
 Bewusst ohne Fremdbibliothek: das sind vier Zeilen Logik und eine Abhängigkeit
 weniger, die auf dem Zielsystem paketiert werden müsste.
@@ -7,10 +9,19 @@ weniger, die auf dem Zielsystem paketiert werden müsste.
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 APP_NAME = "archcustomiser"
 APP_NAME_WIN = "ArchCustomiser"
+# Auf macOS gilt derselbe Name in Grossschreibung -- und ausgeschriebene
+# Verzeichnisse statt Punktverzeichnissen: die sind im Finder unsichtbar,
+# und wer sein Profil oder das Protokoll suchen soll, findet es sonst nicht.
+APP_NAME_MAC = "ArchCustomiser"
+
+
+def _mac_base(*teile: str) -> Path:
+    return Path.home().joinpath("Library", *teile) / APP_NAME_MAC
 
 
 def _windows_base(env_var: str, fallback: str) -> Path:
@@ -31,6 +42,8 @@ def cache_dir() -> Path:
     """Rein derivative Daten. Löschen ist immer sicher."""
     if os.name == "nt":
         return _windows_base("LOCALAPPDATA", "Local") / APP_NAME_WIN / "Cache"
+    if sys.platform == "darwin":
+        return _mac_base("Caches")
     return _xdg("XDG_CACHE_HOME", ".cache") / APP_NAME
 
 
@@ -38,6 +51,8 @@ def config_dir() -> Path:
     """Benutzereinstellungen und Katalog-Overlays."""
     if os.name == "nt":
         return _windows_base("APPDATA", "Roaming") / APP_NAME_WIN
+    if sys.platform == "darwin":
+        return _mac_base("Application Support")
     return _xdg("XDG_CONFIG_HOME", ".config") / APP_NAME
 
 
@@ -45,6 +60,8 @@ def state_dir() -> Path:
     """Logs und sonstiger veränderlicher Zustand."""
     if os.name == "nt":
         return _windows_base("LOCALAPPDATA", "Local") / APP_NAME_WIN / "State"
+    if sys.platform == "darwin":
+        return _mac_base("Logs")
     return _xdg("XDG_STATE_HOME", ".local/state") / APP_NAME
 
 

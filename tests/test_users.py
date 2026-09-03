@@ -64,98 +64,6 @@ def test_two_hashes_of_the_same_password_differ() -> None:
     assert erster != zweiter, "gleiche Hashes deuten auf ein fehlendes Salz"
 
 
-def test_the_cascade_falls_through_to_the_next_level(monkeypatch) -> None:
-    """Faellt libcrypt aus, muss openssl uebernehmen."""
-    monkeypatch.setattr(users, "_hash_via_libcrypt", lambda _p: None)
-    try:
-        hash_ = users.hash_password("probe-passwort")
-    except HashingUnavailable:
-        pytest.skip("openssl ist auf diesem System nicht verfuegbar")
-    assert hash_.startswith("$6$"), "openssl liefert sha512crypt"
-
-
-def test_an_exception_in_one_level_does_not_abort_the_cascade(monkeypatch) -> None:
-    """Ein kaputtes libcrypt darf nicht das ganze Hashen verhindern."""
-
-    def platzt(_password: str) -> str:
-        raise RuntimeError("libcrypt kaputt")
-
-    monkeypatch.setattr(users, "_hash_via_libcrypt", platzt)
-    try:
-        hash_ = users.hash_password("probe-passwort")
-    except HashingUnavailable:
-        pytest.skip("openssl ist auf diesem System nicht verfuegbar")
-    assert hash_.startswith("$6$")
-
-
-def test_without_any_method_it_says_so_clearly(monkeypatch) -> None:
-    monkeypatch.setattr(users, "_hash_via_libcrypt", lambda _p: None)
-    monkeypatch.setattr(users, "_hash_via_openssl", lambda _p: None)
-    with pytest.raises(HashingUnavailable) as info:
-        users.hash_password("egal")
-    # Die Meldung fuer den Benutzer muss sagen, was jetzt passiert -- nicht,
-    # welche Bibliothek fehlt. Der technische Grund steht getrennt davon.
-    meldung = str(info.value)
-    assert "gesperrt" in meldung
-    assert "passwd" in meldung
-    assert "openssl" in info.value.technical or "libcrypt" in info.value.technical
-
-
-def test_hashing_available_agrees_with_hash_password(monkeypatch) -> None:
-    """Die beiden duerfen nicht auseinanderlaufen.
-
-    Waere ``hashing_available()`` optimistischer als die Wirklichkeit, boete
-    die Oberflaeche ein Passwortfeld an, das beim Erzeugen wirkungslos bliebe.
-    """
-    moeglich = users.hashing_available()
-    try:
-        users.hash_password("probe")
-        tatsaechlich = True
-    except HashingUnavailable:
-        tatsaechlich = False
-    assert moeglich == tatsaechlich
-
-    monkeypatch.setattr(users, "_hash_via_libcrypt", lambda _p: None)
-    monkeypatch.setattr(users, "_hash_via_openssl", lambda _p: None)
-    assert users.hashing_available() is False
-
-
-def test_openssl_is_never_given_the_password_as_an_argument(monkeypatch) -> None:
-    """In argv steht das Passwort fuer jeden lesbar in /proc/<pid>/cmdline."""
-    aufgezeichnet: dict[str, object] = {}
-
-    class FakeResult:
-        returncode = 0
-        stdout = "$6$salz$hash"
-        stderr = ""
-
-    def fake_run(argv, **kwargs):
-        aufgezeichnet["argv"] = list(argv)
-        aufgezeichnet["input"] = kwargs.get("input")
-        return FakeResult()
-
-    monkeypatch.setattr(users.shutil, "which", lambda _n: "/usr/bin/openssl")
-    monkeypatch.setattr(users.subprocess, "run", fake_run)
-
-    users._hash_via_openssl("streng-geheim")
-    assert "streng-geheim" not in " ".join(aufgezeichnet["argv"])
-    assert aufgezeichnet["input"] == "streng-geheim", "muss ueber stdin gehen"
-    assert "-stdin" in aufgezeichnet["argv"]
-
-
-def test_openssl_output_in_a_wrong_format_is_rejected(monkeypatch) -> None:
-    """Lieber gar kein Hash als ein unbrauchbarer in der shadow-Datei."""
-
-    class FakeResult:
-        returncode = 0
-        stdout = "voellig unerwartete Ausgabe"
-        stderr = ""
-
-    monkeypatch.setattr(users.shutil, "which", lambda _n: "/usr/bin/openssl")
-    monkeypatch.setattr(users.subprocess, "run", lambda *a, **k: FakeResult())
-    assert users._hash_via_openssl("egal") is None
-
-
 # ---------------------------------------------------------------------------
 # Die erzeugten Dateizeilen
 # ---------------------------------------------------------------------------
@@ -174,3 +82,71 @@ def test_a_shadow_line_never_leaks_the_plaintext() -> None:
     except HashingUnavailable:
         pytest.skip("auf diesem System ist kein Hashen moeglich")
     assert "mein-klartext-passwort" not in hash_
+
+
+# ---------------------------------------------------------------------------
+# Die Kaskade nach dem Umbau
+#
+# Frueher hing das Hashen an libcrypt (nur Linux) oder "openssl passwd -6"
+# (nicht auf macOS, unter Windows nur mit Git for Windows). Seit die zweite
+# Stufe eine eigene Rechnung ist, kann sie nicht mehr fehlschlagen.
+# ---------------------------------------------------------------------------
+
+
+def test_hashing_works_without_any_external_tool(monkeypatch) -> None:
+    """Der Kern des Umbaus: kein Fremdprogramm mehr noetig."""
+    monkeypatch.setattr(users, "_hash_via_libcrypt", lambda _p: None)
+    hash_ = users.hash_password("hunter2")
+    assert hash_.startswith("$6$")
+    assert "hunter2" not in hash_
+
+
+def test_the_module_cannot_start_a_process_at_all() -> None:
+    """Die schaerfste Form der Zusicherung: das Modul kennt subprocess nicht.
+
+    Der Klartext ging frueher durch das stdin eines openssl-Subprozesses.
+    Diesen Weg zu entfernen genuegt nicht -- solange das Modul subprocess noch
+    importiert, kann ihn jemand versehentlich wieder einbauen. Jetzt gibt es
+    den Import nicht mehr, und dieser Test faellt, sobald er zurueckkehrt.
+    """
+    assert not hasattr(users, "subprocess")
+    assert not hasattr(users, "shutil")
+
+
+def test_hashing_starts_no_process(monkeypatch) -> None:
+    """Und zur Sicherheit auch am laufenden Aufruf gemessen."""
+    import subprocess as echtes_subprocess
+
+    monkeypatch.setattr(users, "_hash_via_libcrypt", lambda _p: None)
+
+    def darf_nicht(*args, **kwargs):
+        raise AssertionError("es wurde ein Prozess gestartet")
+
+    monkeypatch.setattr(echtes_subprocess, "run", darf_nicht)
+    monkeypatch.setattr(echtes_subprocess, "Popen", darf_nicht)
+    assert users.hash_password("hunter2").startswith("$6$")
+
+
+def test_libcrypt_still_wins_when_available(monkeypatch) -> None:
+    """yescrypt ist staerker als sha512crypt -- libcrypt behaelt den Vortritt."""
+    monkeypatch.setattr(users, "_hash_via_libcrypt", lambda _p: "$y$jvorgetaeuscht")
+    assert users.hash_password("hunter2") == "$y$jvorgetaeuscht"
+
+
+def test_a_broken_libcrypt_does_not_stop_the_cascade(monkeypatch) -> None:
+    def platzt(_password: str) -> str:
+        raise RuntimeError("libcrypt kaputt")
+
+    monkeypatch.setattr(users, "_hash_via_libcrypt", platzt)
+    assert users.hash_password("hunter2").startswith("$6$")
+
+
+def test_hashing_is_now_available_everywhere(monkeypatch) -> None:
+    """Auch ohne libcrypt -- also auch auf Windows und macOS."""
+    monkeypatch.setattr(users, "_hash_via_libcrypt", lambda _p: None)
+    assert users.hashing_available() is True
+
+
+def test_the_only_remaining_failure_is_an_empty_password() -> None:
+    with pytest.raises(HashingUnavailable):
+        users.hash_password("")

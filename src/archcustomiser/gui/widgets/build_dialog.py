@@ -41,6 +41,7 @@ from .. import theme
 from .common import brush, open_path
 from .step_sidebar import MARK_CURRENT, MARK_DONE, MARK_OPEN
 from ..build_worker import BuildJob
+from .common import passende_mindestgroesse
 
 log = logging.getLogger(__name__)
 
@@ -77,7 +78,11 @@ class BuildDialog(QDialog):
         self._elapsed = QTime(0, 0)
 
         self.setWindowTitle("ISO wird erstellt")
-        self.setMinimumSize(880, 640)
+        # Aus dem tatsaechlich verfuegbaren Bildschirm ableiten statt fest
+        # vorzugeben: bei 1920x1080 und 150 % Skalierung bleiben logisch
+        # nur 1280x720 -- eine feste Mindesthoehe von 720 waere dann genau
+        # die volle Bildschirmhoehe, ohne Platz fuer die Taskleiste.
+        self.setMinimumSize(*passende_mindestgroesse(880, 640))
         self._build_ui()
 
         job.stepChanged.connect(self._on_step)

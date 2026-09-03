@@ -181,3 +181,28 @@ class SearchField(QWidget):
 
     def set_result_count(self, shown: int, total: int) -> None:
         self.count_label.setText("" if shown == total else f"{shown} von {total}")
+
+
+def passende_mindestgroesse(wunsch_breite: int, wunsch_hoehe: int) -> tuple[int, int]:
+    """Eine Mindestgroesse, die auf den Bildschirm passt.
+
+    Feste Werte sind logische Pixel und skalieren nicht mit der DPI -- die
+    verfuegbare logische Flaeche schrumpft dabei aber. Bei 1920x1080 auf 150 %
+    bleiben logisch 1280x720: eine feste Mindesthoehe von 720 ist dann genau die
+    volle Bildschirmhoehe, ohne Platz fuer Task- oder Menueleiste, und das
+    Fenster laesst sich nicht kleiner ziehen.
+
+    Auf einem 1366x768-Notebook bei 125 % (logisch 1092x614) passt es sicher
+    nicht. Deshalb hoechstens neunzig Prozent dessen, was wirklich da ist -- die
+    Scrollbereiche der Seiten fangen den Rest ab.
+    """
+    from PySide6.QtGui import QGuiApplication
+
+    bildschirm = QGuiApplication.primaryScreen()
+    if bildschirm is None:
+        return wunsch_breite, wunsch_hoehe
+    verfuegbar = bildschirm.availableGeometry()
+    return (
+        min(wunsch_breite, int(verfuegbar.width() * 0.9)),
+        min(wunsch_hoehe, int(verfuegbar.height() * 0.9)),
+    )

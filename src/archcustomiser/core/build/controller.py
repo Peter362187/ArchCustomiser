@@ -21,7 +21,6 @@ hilft.
 from __future__ import annotations
 
 import logging
-import shutil
 import threading
 import time
 from collections import deque
@@ -31,7 +30,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Callable
 
-from ..archiso import DirectorySink, GeneratedProfile, ProfileGenerator
+from ..archiso import GeneratedProfile, ProfileGenerator
 from ..archiso.settings import derive_bootmodes
 from ..archiso.errors import ProfileError
 from ..catalog import Catalog
@@ -39,14 +38,16 @@ from ..config import BuildConfig
 from ..resolver import Resolution
 from ..secrets import SecretStore
 from .errors import BuildCancelled, BuildError
-from .preflight import PreflightReport, run_preflight
+from .preflight import PreflightReport
 from .progress import ProgressState
 from .runner import MAX_KEPT_LINES, BuildResult, MkarchisoRunner
-from .targets import ExecutionTarget, LocalTarget, WslExecutionTarget
+from . import targets as targets_module
+from .targets import BuildPaths, ExecutionTarget, LocalTarget
 
 log = logging.getLogger(__name__)
 
-PROFILE_DIRNAME = "profile"
+# Wandert mit der Profilablage ins Ziel -- hier nur noch weitergereicht.
+PROFILE_DIRNAME = targets_module.PROFILE_DIRNAME
 
 
 class Step(str, Enum):
@@ -109,9 +110,11 @@ class BuildController:
         # Einhaengepunkt fuer die Tests: der Ablauf laesst sich damit
         # vollstaendig pruefen, ohne mkarchiso zu haben.
         self.runner_factory = runner_factory or MkarchisoRunner
-        # Wo gebaut wird: hier oder in einer WSL-Verteilung nebenan.
+        # Wo gebaut wird: hier, in einer WSL-Verteilung oder in einem
+        # Container. Der Controller unterscheidet das nicht mehr -- er
+        # ruft nur noch Protokollmethoden auf.
         self.target: ExecutionTarget = target or LocalTarget()
-        self._wsl_paths = None
+        self._paths: BuildPaths | None = None
         self._output_fetched = False
         self._runner: MkarchisoRunner | None = None
         self._cancelled = False
@@ -126,19 +129,12 @@ class BuildController:
     def preflight(self, work_dir: Path, out_dir: Path) -> PreflightReport:
         """Prueft dort, wo tatsaechlich gebaut wird.
 
-        Bei einem Bau in WSL waere eine Pruefung des Windows-Systems
-        irrefuehrend: die Werkzeuge, der Plattenplatz und die Rechte liegen
-        alle in der Verteilung.
+        Bei einem Bau in WSL oder im Container waere eine Pruefung des
+        aufrufenden Systems irrefuehrend -- dort fehlt mkarchiso zwangslaeufig,
+        ohne dass das ein Hindernis waere. Welche Befunde auf dem Wirt gelten
+        und welche drueben, weiss das jeweilige Ziel.
         """
-        if isinstance(self.target, WslExecutionTarget):
-            from .preflight import run_wsl_preflight
-
-            return run_wsl_preflight(
-                self.target.wsl,
-                out_dir,
-                installed_mb=self.resolution.estimated_size_mb,
-            )
-        return run_preflight(
+        return self.target.preflight(
             work_dir,
             out_dir,
             installed_mb=self.resolution.estimated_size_mb,
@@ -173,6 +169,7 @@ class BuildController:
         # ohnehin je Build.
         self._lines.clear()
         self._output_fetched = False
+        self._paths = None
         with self._lock:
             self._runner = None
 
@@ -197,16 +194,17 @@ class BuildController:
 
             # 3 -- Profil dorthin bringen, wo gebaut wird
             self._announce(on_step, on_progress, Step.WRITE, "Profil wird uebertragen")
-            build_paths = self._place_profile(profile, work_dir, out_dir, on_progress)
+            paths = self.target.prepare(profile.settings.iso_name, work_dir, out_dir)
+            self._paths = paths
+            self._place_profile(profile, paths, on_progress)
             self._check_cancel()
 
             # 4 -- der eigentliche Build
             self._announce(on_step, on_progress, Step.MKARCHISO, "ISO wird gebaut")
-            profile_path, work_path, out_path = build_paths
             runner = self.runner_factory(
-                profile_path,
-                work_path,
-                out_path,
+                paths.profile,
+                paths.work,
+                paths.out,
                 privilege_mode=report.privilege_mode,
                 source_date_epoch=int(datetime.now(timezone.utc).timestamp()),
                 target=self.target,
@@ -235,11 +233,19 @@ class BuildController:
 
             # 5 -- Aufraeumen
             self._announce(on_step, on_progress, Step.CLEANUP, "Aufraeumen")
-            self._cleanup_all(work_dir, keep_work_dir=keep_work_dir)
+            self._cleanup_all(paths, keep_work_dir=keep_work_dir)
             if on_progress is not None:
                 on_progress(1.0, "Fertig", f"{result.size_mb:.0f} MB")
 
         except BuildCancelled:
+            # Vor dem Werfen noch aufraeumen. Frueher wurde Schritt 5 bei einem
+            # Abbruch uebersprungen -- ausgerechnet in dem Fall, in dem am
+            # meisten liegenbleibt.
+            if self._paths is not None:
+                try:
+                    self._cleanup_all(self._paths, keep_work_dir=keep_work_dir)
+                except Exception:
+                    log.debug("Aufraeumen nach Abbruch fehlgeschlagen", exc_info=True)
             outcome.log_path = self._write_log(outcome, cancelled=True)
             raise
         except (BuildError, ProfileError) as exc:
@@ -311,83 +317,36 @@ class BuildController:
     def _place_profile(
         self,
         profile,
-        work_dir: Path,
-        out_dir: Path,
+        paths: BuildPaths,
         on_progress: ProgressCallback | None,
-    ) -> tuple[str, str, str]:
-        """Bringt das Profil dorthin, wo mkarchiso es findet.
+    ) -> None:
+        """Das Profil dorthin bringen, wo mkarchiso es findet.
 
-        Lokal: als Verzeichnis. In WSL: als Archiv hinueber und dort auspacken --
-        auf einem Windows-Laufwerk gingen die symbolischen Verknuepfungen
-        verloren, und das Abbild koennte keine Dienste aktivieren.
+        Wie das geschieht, weiss das Ziel: lokal als Verzeichnis, bei WSL als
+        Archiv hinueber und dort ausgepackt, im Container ueber den Bind-Mount.
         """
-        if isinstance(self.target, WslExecutionTarget):
-            from .wsl_build import prepare_paths, transfer_profile
-
-            paths = prepare_paths(self.target.wsl, profile.settings.iso_name)
-            self._wsl_paths = paths
-            if on_progress is not None:
-                self._sub_progress(
-                    on_progress, Step.WRITE, 0.3,
-                    "Profil wird uebertragen", "Archiv wird gepackt",
-                )
-            transfer_profile(
-                self.target.wsl, profile.tree, paths, profile.settings.iso_name
-            )
-            if on_progress is not None:
-                self._sub_progress(
-                    on_progress, Step.WRITE, 1.0,
-                    "Profil wird uebertragen",
-                    f"{profile.tree.symlink_count} Verknuepfungen uebernommen",
-                )
-            return paths.as_strings()
-
-        profile_dir = work_dir / PROFILE_DIRNAME
-        if profile_dir.exists():
-            shutil.rmtree(profile_dir, ignore_errors=True)
-        DirectorySink(
-            profile_dir, iso_name=profile.settings.iso_name, force=True
-        ).write(
+        self.target.deliver_profile(
             profile.tree,
-            progress=lambda done, total: self._sub_progress(
-                on_progress, Step.WRITE, done / total if total else 1.0,
-                "Profil wird geschrieben", f"{done} von {total} Dateien",
+            paths,
+            iso_name=profile.settings.iso_name,
+            on_progress=lambda anteil, text: self._sub_progress(
+                on_progress, Step.WRITE, anteil, "Profil wird uebertragen", text
             ),
         )
-        return str(profile_dir), str(work_dir / "work"), str(out_dir)
 
-    def _cleanup_all(self, work_dir: Path, *, keep_work_dir: bool) -> None:
-        if isinstance(self.target, WslExecutionTarget) and self._wsl_paths is not None:
-            from .wsl_build import cleanup
+    def _cleanup_all(self, paths: BuildPaths, *, keep_work_dir: bool) -> None:
+        """Aufraeumen ueberlaesst der Controller dem Ziel.
 
-            cleanup(
-                self.target.wsl,
-                self._wsl_paths,
-                keep_work_dir=keep_work_dir,
-                remove_output=self._output_fetched,
-            )
-            return
-        if not keep_work_dir:
-            self._cleanup(work_dir)
-
-    def _cleanup(self, work_dir: Path) -> None:
-        """Das Arbeitsverzeichnis loeschen.
-
-        Bewusst selbst und nicht ueber ``mkarchiso -r``: der Schalter raeumt
-        schon waehrend der ISO-Erzeugung auf und verweigert die Arbeit, wenn
-        das Verzeichnis vorher existierte.
+        Frueher stand hier eine isinstance-Verzweigung: WSL raeumte anders auf
+        als lokal, und der Controller musste beide Faelle kennen. Bei einem
+        dritten Ziel waeren daraus neun Sonderfaelle geworden.
         """
-        for name in ("work", PROFILE_DIRNAME):
-            target = work_dir / name
-            if not target.exists():
-                continue
-            try:
-                shutil.rmtree(target)
-                log.info("Aufgeraeumt: %s", target)
-            except OSError as exc:
-                # Ein misslungenes Aufraeumen darf einen erfolgreichen Build
-                # nicht nachtraeglich zum Fehlschlag machen.
-                log.warning("%s liess sich nicht loeschen: %s", target, exc)
+        self.target.discard(
+            paths,
+            keep_work_dir=keep_work_dir,
+            remove_output=self._output_fetched,
+        )
+
 
     def _write_log(
         self,

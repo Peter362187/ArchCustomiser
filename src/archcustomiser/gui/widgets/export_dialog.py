@@ -11,6 +11,7 @@ moegliche Gruende, ``[Zurueck]`` und ``[Log anzeigen]``.
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 
 from PySide6.QtCore import Qt
@@ -89,11 +90,14 @@ class ExportResultDialog(QDialog):
             "mit Spielen sind 25 bis 40 GB realistisch -- und muss auf einem "
             "Linux-Dateisystem liegen."
         ]
-        if as_archive:
+        if as_archive and os.name == "nt":
             # Ein archiso-Profil enthaelt Verknuepfungen auf absolute Pfade des
             # spaeteren Systems (/usr/lib/systemd/...). Unter Windows lassen die
             # sich nicht anlegen; das offizielle archiso-Repository verhaelt sich
             # dabei genauso.
+            #
+            # Nur unter Windows: auf Linux und macOS entpackt das Archiv
+            # einwandfrei, und der Hinweis waere dort schlicht falsch.
             hints.insert(
                 0,
                 "Das Archiv erst auf dem Linux-System entpacken. Unter Windows "
@@ -108,9 +112,9 @@ class ExportResultDialog(QDialog):
         layout.addWidget(hint)
 
         buttons = QHBoxLayout()
-        copy_button = QPushButton("Befehle kopieren")
-        copy_button.clicked.connect(self._copy)
-        buttons.addWidget(copy_button)
+        self.copy_button = QPushButton("Befehle kopieren")
+        self.copy_button.clicked.connect(self._copy)
+        buttons.addWidget(self.copy_button)
         buttons.addStretch(1)
         box = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         box.rejected.connect(self.reject)
@@ -119,7 +123,6 @@ class ExportResultDialog(QDialog):
         layout.addLayout(buttons)
 
     def _copy(self) -> None:
-
         copy_to_clipboard(self.commands.toPlainText(), self.copy_button)
 
 
