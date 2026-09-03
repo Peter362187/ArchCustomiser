@@ -102,6 +102,10 @@ git clone https://github.com/Peter362187/ArchCustomiser.git && cd ArchCustomiser
 ./archcustomiser.sh
 ```
 
+If the shell says `Permission denied`, the executable bit was lost on
+download — use `chmod +x archcustomiser.sh`, or just `sh archcustomiser.sh`,
+which always works.
+
 The counterpart to `ArchCustomiser.bat`: it sets up the environment on first
 run and just starts the program afterwards. Every failure path names the
 command that fixes it, matched to the package manager it finds (apt, dnf,

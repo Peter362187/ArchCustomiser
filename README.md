@@ -228,6 +228,10 @@ git clone https://github.com/Peter362187/ArchCustomiser.git && cd ArchCustomiser
 ./archcustomiser.sh
 ```
 
+Meldet die Shell `Permission denied`, ist beim Herunterladen das
+Ausführbar-Recht verlorengegangen. Dann entweder `chmod +x archcustomiser.sh`
+oder einfach `sh archcustomiser.sh` — das geht immer.
+
 Das ist das Gegenstück zu `ArchCustomiser.bat` und tut dasselbe: beim ersten
 Mal richtet es die Programmumgebung selbst ein, danach startet es nur noch.
 Scheitert etwas, sagt es in einem Satz, woran — und nennt den Befehl, der es
