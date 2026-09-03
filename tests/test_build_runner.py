@@ -96,8 +96,19 @@ def test_pkexec_wraps_the_call(dirs, monkeypatch) -> None:
     )
     runner = MkarchisoRunner(profile, work, out, privilege_mode="pkexec")
     argv = runner.build_argv()
-    assert argv[0].endswith("pkexec")
+    assert any(item.endswith("pkexec") for item in argv)
     assert any(item.endswith("mkarchiso") for item in argv)
+
+    # Seit der Kerngrenze steht pkexec nicht mehr zwingend an Position 0.
+    # Die Reihenfolge ist dabei kein Zufall, sondern eine Entscheidung:
+    # taskset steht AUSSEN. Andernfalls saehe polkit nicht mehr mkarchiso als
+    # das Programm, das ausgefuehrt werden soll, sondern taskset -- und eine
+    # Regel, die nur mkarchiso erlaubt, wuerde stillschweigend brechen. Die
+    # Kernbindung uebersteht execve und setuid, sie darf deshalb davor.
+    if "taskset" in argv:
+        assert argv.index("taskset") < next(
+            i for i, item in enumerate(argv) if item.endswith("pkexec")
+        ), "taskset gehoert vor pkexec, sonst autorisiert polkit das falsche Programm"
 
 
 def test_environment_forces_a_predictable_language(dirs) -> None:

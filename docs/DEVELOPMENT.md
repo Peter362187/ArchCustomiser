@@ -235,7 +235,7 @@ Einzelheiten im Abschnitt [Passwort-Hash](#passwort-hash) weiter unten.
 
 ## Tests
 
-488 Tests, ohne Netzwerk und ohne Bildschirm.
+530 Tests, ohne Netzwerk und ohne Bildschirm.
 
 * **`build_fake_syncdb()`** erzeugt echte `tar.gz`-Archive im ALPM-Format, keine
   Attrappen. So fällt eine Formatänderung bei pacman auf.
@@ -488,6 +488,76 @@ Linux-System.
 ---
 
 ## Der ISO-Build (Phase 6)
+
+### Die Lastgrenze: ein Bau bekommt nie den ganzen Rechner
+
+Am 03.09.2026 hat ein Bau über WSL einen Windows-Rechner (12 Kerne, 15,4 GB)
+vollständig unbedienbar gemacht — kein Fenster ließ sich mehr verschieben, der
+Abbrechen-Knopf war nicht erreichbar, nur ein harter Neustart half. Die letzte
+Protokollzeile war `Parallel mksquashfs: Using 12 processors`.
+
+`core/build/limits.py` hält die Regel: **die Hälfte der Kerne, mindestens
+einer, nie alle.** Umgesetzt wird sie in `wrap()` jedes Ziels — `taskset -c
+0-N` bei `LocalTarget` und `WslExecutionTarget`, `--cpus` bei
+`ContainerExecutionTarget`.
+
+Vier Wege wurden geprüft und drei verworfen:
+
+* **`-processors` in `COMPRESSION_PRESETS`** (`archiso/settings.py`) — verworfen.
+  Die Presets wandern unverändert in `profiledef.sh`, und das Profil ist
+  exportierbar: eine auf zwölf Kernen ermittelte Zahl landete in einem Profil,
+  das jemand auf vier Kernen baut. Außerdem müsste `build_settings` den
+  Zielrechner befragen — und es läuft in der Vorschau der Zusammenfassungsseite
+  **auf dem GUI-Faden**. Eine Reparatur gegen ein Einfrieren, die ein
+  Einfrieren einbaut.
+* **`nice`/`ionice` in der Verteilung** — verworfen, weil wirkungslos. `nice`
+  ordnet Prozesse innerhalb *einer* Planungsdomäne; in der WSL-Maschine läuft
+  außer dem Bau nichts, dem er weichen könnte, und der Bedarf, den `vmmem` beim
+  Windows-Planer anmeldet, bleibt unverändert. Nur eine echte Obergrenze senkt
+  die Nachfrage.
+* **`-mem` bei mksquashfs** — verworfen als Hauptmittel. Der Schalter begrenzt
+  nur dessen eigene Caches (Vorgabe 25 % des sichtbaren Speichers, auf dem
+  betroffenen Rechner gemessen: 1903 MB). Was den Speicher wirklich füllt, ist
+  der Seiten-Cache des Gastkernels. Weniger Fäden senken den Durchsatz und
+  damit auch diesen Druck — der Kernschnitt wirkt auf beides.
+* **`taskset` im `wrap()` des Ziels** — gewählt. Dort ist der Zielrechner
+  bekannt, Abfragen laufen im Bau-Faden, und die Bindung erbt sich über
+  `execve` durch den ganzen Prozessbaum: pacstrap, pacman, mksquashfs und
+  xorriso gleichermaßen. Profil, Export und Oberfläche bleiben unberührt.
+
+Belegt, nicht vermutet — auf dem betroffenen Rechner gemessen:
+
+```
+mksquashfs …                 →  Parallel mksquashfs: Using 12 processors
+taskset -c 0-5 mksquashfs …  →  Parallel mksquashfs: Using 6 processors
+```
+
+`taskset` steht dabei **vor** `pkexec`, nicht dahinter: sonst sähe polkit
+`taskset` als das auszuführende Programm, und eine Regel, die nur `mkarchiso`
+erlaubt, bräche stillschweigend.
+
+### Warum der Abbruch nach dem Arbeitsverzeichnis sucht
+
+`pkill -TERM -f mkarchiso` war falsch — und zwar auf eine Art, die niemandem
+auffiel: `mkarchiso` ist nur das rufende Bash-Skript. Die Last erzeugt sein
+Kind `mksquashfs`, dessen Befehlszeile das Wort „mkarchiso" **nicht** enthält.
+Der Abbruch ging ins Leere, während die Oberfläche „Abgebrochen" meldete.
+
+`WslExecutionTarget.kill_pattern()` verwendet stattdessen das
+Arbeitsverzeichnis. Es steht in der Befehlszeile *jedes* beteiligten Prozesses
+und ist zugleich eng genug, dass ein `pacman` des Benutzers in derselben
+Verteilung unbehelligt bleibt. Die Punkte im Pfad (`/root/.cache/…`) werden
+maskiert, sonst träfe der Ausdruck mehr als gemeint. Nach `TERM` wird mit
+`pgrep` nachgesehen; erst dann folgt `KILL`, und überlebt trotzdem etwas, sagt
+das Protokoll den Befehl zum Nachhelfen.
+
+### Warum der Abbruch neben der Oberfläche läuft
+
+Ein Abbruch kostet beim WSL-Ziel mehrere `wsl.exe`-Aufrufe mit je 30 s
+Zeitlimit plus die Frist. Bis zum 03.09.2026 lief das alles im Oberflächenfaden
+— genau verkehrt herum, denn der Knopf wird gedrückt, *weil* der Rechner
+überlastet ist. `BuildJob.cancel()` startet dafür jetzt `_CancelThread` und
+kehrt sofort zurück; ein zweiter Klick startet keinen zweiten Faden.
 
 ### Ohne `-v` gibt es keinen Fortschritt
 

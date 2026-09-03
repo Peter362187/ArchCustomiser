@@ -28,7 +28,7 @@ pacman, nicht dieses Programm.
 | 6 | ISO-Build ausführen (`mkarchiso` starten) | fertig |
 | 7 | Logging und Fehlerbehandlung | fertig |
 | 8 | Branding | fertig |
-| 9 | Tests | laufend (488) |
+| 9 | Tests | laufend (530) |
 | 10 | UI/UX und Dokumentation | laufend |
 
 **Der Funktionsumfang ist vollständig:** Wizard, Profile, Paketprüfung, Dry-Run,
@@ -104,6 +104,33 @@ es den Profil-Export an statt eines ausgegrauten Knopfes.
 Zielbaum ein und braucht dafür `CAP_SYS_ADMIN`. Ein Weg ohne diese Rechte
 existiert nicht: `devtmpfs` lässt sich in einem User-Namespace grundsätzlich
 nicht einhängen. Arch baut seine eigenen ISOs genauso.
+
+### Ein Bau bekommt nie den ganzen Rechner
+
+Das ist eine Zusicherung, keine Einstellung. Der Bau nimmt sich **die Hälfte
+der Kerne**, der Rest bleibt für die Bedienung frei. Vor dem Start steht die
+Zahl in der Vorabprüfung:
+
+```
+[ok  ] Rechenlast: 6 von 12 Kernen -- der Rest bleibt fuer die Bedienung des Rechners frei
+```
+
+Der Grund ist ein echter Vorfall vom 03.09.2026: ein Bau auf einem Rechner mit
+zwölf Kernen hat Windows vollständig zum Stillstand gebracht — kein Fenster
+ließ sich mehr verschieben, der Abbrechen-Knopf war nicht mehr erreichbar, nur
+ein harter Neustart half. Die letzte Zeile im Protokoll lautete
+`Parallel mksquashfs: Using 12 processors`.
+
+Ohne Vorgabe startet `mksquashfs` einen Kompressionsfaden je sichtbarem Kern.
+Unter WSL2 sind das ohne `.wslconfig` **alle** Kerne des Wirts — für den
+Fensterverwalter von Windows bleibt dann keine Rechenzeit mehr. Das Programm
+bindet den Bau deshalb selbst an eine Teilmenge der Kerne (`taskset` bzw.
+`--cpus` beim Container), auf allen drei Bauwegen gleichermaßen. Eine
+`.wslconfig` musst du dafür **nicht** anlegen.
+
+Ein Bau bleibt trotzdem spürbar: der Rechner wird wärmer und langsamer. Aber er
+bleibt bedienbar, und **Abbrechen wirkt sofort** — die Abbruchkette läuft seit
+demselben Tag neben der Oberfläche statt in ihr.
 
 ### Zum Bauen einer ISO unter Windows
 
@@ -473,7 +500,7 @@ src/archcustomiser/
 ├── data/catalog/            der gesamte Optionsumfang als YAML
 └── profiles/                mitgelieferte Profile
 
-tests/                       488 Tests, ohne Netz und ohne Bildschirm
+tests/                       530 Tests, ohne Netz und ohne Bildschirm
 tools/                       Hilfsskripte für die Entwicklung
 ArchCustomiser.bat           Doppelklick-Start, richtet sich selbst ein
 ```
@@ -528,6 +555,7 @@ Diese Trennung gehört in die Dokumentation, nicht ins Kleingedruckte:
 |---|---|
 | Oberfläche unter Windows | im Gebrauch |
 | ISO-Bau über WSL | **zwei echte ISOs gebaut**, 1311 MB und 2525 MB |
+| Kerngrenze beim Bau | **auf echter Hardware gemessen**: mksquashfs meldet 6 statt 12 Fäden |
 | Profil-Erzeugung und Export | durch Tests und im Gebrauch belegt |
 | ISO-Bau direkt auf Arch | durch Tests belegt, nicht auf echter Hardware gelaufen |
 | **ISO-Bau im Container** | **Aufrufe durch Tests belegt, aber noch auf keinem echten Ubuntu, Fedora oder Mac gelaufen** |

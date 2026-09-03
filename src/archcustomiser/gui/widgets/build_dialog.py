@@ -281,6 +281,11 @@ class BuildDialog(QDialog):
         if self._done:
             self.reject()
             return
+        if self.job.cancelling:
+            # Laeuft schon. Nicht ein zweites Mal fragen -- der Abbruch
+            # braucht seine Zeit, und ein zweiter Dialog liesse den Benutzer
+            # glauben, der erste sei wirkungslos gewesen.
+            return
         answer = QMessageBox.question(
             self,
             "Build abbrechen?",

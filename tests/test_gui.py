@@ -302,3 +302,71 @@ def test_every_button_signature_actually_matches(qapp, monkeypatch) -> None:
     aufgerufen.clear()
     dialog._recheck()
     assert aufgerufen, "der Knopf 'Erneut pruefen' hat run_with_wait nie erreicht"
+
+
+# ---------------------------------------------------------------------------
+# Der Abbruch darf die Oberflaeche nicht anhalten
+#
+# Am 03.09.2026 hat ein Bau einen Rechner unbedienbar gemacht. Der
+# Abbrechen-Knopf lief damals synchron im Oberflaechenfaden bis in die
+# WSL-Verteilung hinein -- also genau der Faden, der das Fenster zeichnet,
+# wartete bis zu anderthalb Minuten auf mehrere wsl.exe-Aufrufe. Der Knopf
+# wird aber gedrueckt, WEIL der Rechner schon ueberlastet ist.
+# ---------------------------------------------------------------------------
+
+
+def test_cancelling_does_not_block_the_interface(qapp, catalog, resolver) -> None:
+    import time
+
+    from tests.test_build_controller import make_config
+    from archcustomiser.gui.build_worker import BuildJob
+
+    config = make_config()
+    job = BuildJob(catalog, config, resolver.resolve(config))
+
+    class ZaeherAbbruch:
+        """Ein Ziel, das sich Zeit laesst -- so wie WSL unter Last."""
+
+        def __init__(self) -> None:
+            self.fertig = False
+
+        def cancel(self) -> None:
+            time.sleep(1.5)
+            self.fertig = True
+
+    job.controller = ZaeherAbbruch()
+
+    begonnen = time.monotonic()
+    job.cancel()
+    gebraucht = time.monotonic() - begonnen
+
+    assert gebraucht < 0.3, (
+        f"cancel() hat den Oberflaechenfaden {gebraucht:.1f} s blockiert -- "
+        "genau der Fehler, der den Abbrechen-Knopf wirkungslos machte"
+    )
+    assert job.cancelling, "die Oberflaeche weiss nicht, dass abgebrochen wird"
+
+    assert job.wait(10_000), "der Abbruchfaden ist nicht fertig geworden"
+    assert job.controller.fertig, "der Abbruch wurde nie ausgefuehrt"
+
+
+def test_a_second_click_does_not_start_a_second_cancel(qapp, catalog, resolver) -> None:
+    from tests.test_build_controller import make_config
+    from archcustomiser.gui.build_worker import BuildJob
+
+    config = make_config()
+    job = BuildJob(catalog, config, resolver.resolve(config))
+
+    class Zaehlend:
+        aufrufe = 0
+
+        def cancel(self) -> None:
+            Zaehlend.aufrufe += 1
+
+    job.controller = Zaehlend()
+    job.cancel()
+    job.cancel()
+    job.cancel()
+    job.wait(10_000)
+
+    assert Zaehlend.aufrufe == 1

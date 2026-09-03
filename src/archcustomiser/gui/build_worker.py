@@ -77,6 +77,31 @@ class _BuildThread(QThread):
             self.failed.emit(exc)
 
 
+class _CancelThread(QThread):
+    """Bricht den Bau ab -- neben der Oberflaeche, nicht in ihr.
+
+    Ein Abbruch ist keine schnelle Sache. Beim WSL-Ziel schickt er ein Signal
+    in die Verteilung, wartet die Frist ab, kontrolliert nach und greift
+    notfalls hart durch: mehrere ``wsl.exe``-Aufrufe mit je 30 s Zeitlimit.
+
+    Bis zum 03.09.2026 lief das alles im Oberflaechenfaden. Das war genau
+    verkehrt herum: der Abbrechen-Knopf wird gedrueckt, **weil** der Rechner
+    ueberlastet ist -- und legte dann das Fenster fuer bis zu anderthalb
+    Minuten vollstaendig still. Der Benutzer sah ein totes Programm und hielt
+    den Abbruch fuer wirkungslos.
+    """
+
+    def __init__(self, controller: BuildController, parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self.controller = controller
+
+    def run(self) -> None:
+        try:
+            self.controller.cancel()
+        except Exception:        # ein Abbruch darf nie seinerseits scheitern
+            log.exception("Abbruch fehlgeschlagen")
+
+
 class BuildJob(QObject):
     """Steuert einen Build und buendelt seine Ausgabe fuer die Oberflaeche."""
 
@@ -98,6 +123,8 @@ class BuildJob(QObject):
         super().__init__(parent)
         self.controller = BuildController(catalog, config, resolution, secrets)
         self._thread: _BuildThread | None = None
+        self._cancel_thread: _CancelThread | None = None
+        self._cancel_requested = False
         self._pending: list[str] = []
 
         # Sammelt die Ausgabe und gibt sie im festen Takt weiter.
@@ -126,13 +153,34 @@ class BuildJob(QObject):
         self._flush.start()
         thread.start()
 
+    @property
+    def cancelling(self) -> bool:
+        return self._cancel_requested
+
     def cancel(self) -> None:
-        self.controller.cancel()
+        """Kehrt sofort zurueck; der Abbruch selbst laeuft nebenher.
+
+        Die Oberflaeche bleibt damit waehrend des Abbruchs bedienbar. Dass der
+        Merker im Controller dadurch erst wenige Millisekunden spaeter gesetzt
+        wird, ist ohne Folge: der Controller prueft ihn zwischen den Schritten,
+        und der Bau dauert Minuten.
+        """
+        if self._cancel_requested:
+            return
+        self._cancel_requested = True
+        thread = _CancelThread(self.controller, self)
+        self._cancel_thread = thread
+        thread.start()
 
     def wait(self, milliseconds: int = 30000) -> bool:
-        if self._thread is None:
-            return True
-        return self._thread.wait(milliseconds)
+        fertig = True
+        if self._thread is not None:
+            fertig = self._thread.wait(milliseconds)
+        # Auch der Abbruchfaden muss durch sein, sonst raeumt Qt ihn beim
+        # Beenden unter einem laufenden pkill weg.
+        if self._cancel_thread is not None:
+            fertig = self._cancel_thread.wait(milliseconds) and fertig
+        return fertig
 
     # -- intern ---------------------------------------------------------------
     def _collect(self, line: str) -> None:

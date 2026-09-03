@@ -50,6 +50,25 @@ There is no rootless path: `devtmpfs` has no `FS_USERNS_MOUNT` flag in the
 kernel and therefore cannot be mounted inside a user namespace at all. Arch
 builds its own release ISOs the same way.
 
+### A build never gets the whole machine
+
+This is a guarantee, not a setting. A build takes **half the cores**; the rest
+stays free so you can keep using the computer. The number is shown before the
+build starts.
+
+The reason is a real incident on 2026-09-03: a build on a twelve-core machine
+froze Windows completely — no window could be moved, the cancel button was out
+of reach, only a hard reboot helped. The last line in the log read
+`Parallel mksquashfs: Using 12 processors`.
+
+Given no limit, `mksquashfs` starts one compression thread per visible core —
+and under WSL2 without a `.wslconfig` that means every core of the host. So the
+program pins the build itself (`taskset`, or `--cpus` for the container), on all
+three build paths. You do **not** need to write a `.wslconfig`.
+
+Cancelling now runs beside the interface rather than inside it, so the window
+stays responsive while the build is being stopped.
+
 ---
 
 ## Installation
@@ -158,6 +177,7 @@ This distinction belongs in the documentation, not in the small print:
 |---|---|
 | Interface on Windows | in daily use |
 | ISO build via WSL | **two real ISOs built**, 1311 MB and 2525 MB |
+| CPU limit during a build | **measured on real hardware**: mksquashfs reports 6 threads instead of 12 |
 | Profile generation and export | covered by tests and in use |
 | ISO build directly on Arch | covered by tests, not run on real hardware |
 | **ISO build in a container** | **calls covered by tests, never run on a real Ubuntu, Fedora or Mac** |
@@ -186,7 +206,7 @@ The complete documentation is German:
 * **[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)** — architecture, design decisions
   and the reasoning behind them
 
-488 tests, no network and no display required:
+530 tests, no network and no display required:
 
 ```bash
 python -m pytest -q

@@ -34,6 +34,7 @@ from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Callable, Mapping, Protocol, Sequence
 
 from .errors import MkarchisoMissing
+from .limits import cpu_budget, describe_budget, host_cores
 
 if TYPE_CHECKING:
     from .preflight import PreflightReport
@@ -178,7 +179,18 @@ class LocalTarget:
         self, argv: Sequence[str], *, env: Mapping[str, str] | None = None
     ) -> list[str]:
         # Lokal erbt der Prozess die Umgebung ohnehin.
-        return [str(item) for item in argv]
+        arguments = [str(item) for item in argv]
+        # Dieselbe Zusicherung wie in den anderen beiden Wegen. Auf einem
+        # nativen Arch ist die Not zwar geringer -- der Planer sieht alle
+        # Prozesse und bevorzugt die interaktiven --, aber zwoelf gesaettigte
+        # Kerne machen auch dort jede Arbeit am Rechner zaeh. Und eine
+        # Zusicherung, die nur auf zwei von drei Wegen gilt, ist keine.
+        kerne = host_cores()
+        if kerne > 1 and shutil.which("taskset"):
+            erlaubt = cpu_budget(kerne)
+            log.info("Kerngrenze fuer den Bau: %s", describe_budget(erlaubt, kerne))
+            return ["taskset", "-c", f"0-{erlaubt - 1}", *arguments]
+        return arguments
 
     def make_dirs(self, *paths: str) -> None:
         for path in paths:
@@ -303,11 +315,66 @@ class WslExecutionTarget:
     def __init__(self, wsl_target) -> None:
         self.wsl = wsl_target
         self.name = f"wsl:{wsl_target.distribution}"
+        # Einmal ermittelt, dann behalten: wrap() darf nicht bei jedem Aufruf
+        # zwei wsl.exe-Unterprozesse starten.
+        self._cpu_prefix: list[str] | None = None
+        self._cpu_note = ""
+        # Erst prepare() weiss, wo drueben gearbeitet wird. Ein Abbruch kann
+        # aber schon davor kommen.
+        self._paths = None
 
     def resolve_executable(self) -> str:
         if not self.wsl.has_command("mkarchiso"):
             raise MkarchisoMissing()
         return "mkarchiso"
+
+    def cpu_prefix(self) -> list[str]:
+        """Der ``taskset``-Vorspann, der dem Bau die Kerne zuteilt.
+
+        Die Kernzahl wird **in der Verteilung** erfragt, nicht auf der
+        Windows-Seite: WSL2 kann anders ausgestattet sein als der Wirt, etwa
+        wenn eine ``.wslconfig`` schon eine Grenze setzt. Dann ist deren Wert
+        der richtige Ausgangspunkt.
+
+        ``taskset`` bindet den Prozess an eine Teilmenge der Kerne, und alle
+        Kinder erben die Bindung -- pacstrap, mksquashfs und xorriso
+        gleichermassen. mksquashfs liest seine Fadenzahl aus genau dieser
+        Bindung: mit ``taskset -c 0-1`` meldet es "Using 2 processors".
+
+        Laesst sich etwas davon nicht feststellen, bleibt der Vorspann leer und
+        der Bau laeuft wie bisher. Eine Schutzmassnahme darf nie zum Hindernis
+        werden.
+        """
+        if self._cpu_prefix is not None:
+            return self._cpu_prefix
+
+        self._cpu_prefix = []
+        try:
+            if not self.wsl.has_command("taskset"):
+                log.warning(
+                    "taskset fehlt in %s -- der Bau laeuft ohne Kerngrenze und "
+                    "kann den Rechner stark auslasten.",
+                    self.wsl.distribution,
+                )
+                return self._cpu_prefix
+            ergebnis = self.wsl.run(["nproc"], timeout=30.0)
+            if not ergebnis.ok:
+                return self._cpu_prefix
+            kerne = int(ergebnis.stdout.strip())
+        except (OSError, ValueError, AttributeError):
+            log.warning("Kernzahl der Verteilung unbekannt", exc_info=True)
+            return self._cpu_prefix
+        except Exception:            # ein Ziel darf daran nicht scheitern
+            log.warning("Kerngrenze liess sich nicht bestimmen", exc_info=True)
+            return self._cpu_prefix
+
+        if kerne <= 1:
+            return self._cpu_prefix
+        erlaubt = cpu_budget(kerne)
+        self._cpu_note = describe_budget(erlaubt, kerne)
+        log.info("Kerngrenze fuer den Bau: %s", self._cpu_note)
+        self._cpu_prefix = ["taskset", "-c", f"0-{erlaubt - 1}"]
+        return self._cpu_prefix
 
     def wrap(
         self, argv: Sequence[str], *, env: Mapping[str, str] | None = None
@@ -332,7 +399,9 @@ class WslExecutionTarget:
                     raise ValueError(f"unzulaessiger Wert fuer {key!r}")
                 assignments.append(f"{key}={text}")
             arguments = ["env", *assignments, *arguments]
-        return self.wsl.wrap(arguments)
+        # Die Kerngrenze ganz nach vorn: taskset fuehrt env aus, env fuehrt
+        # mkarchiso aus, und die Bindung erbt sich durch den ganzen Baum.
+        return self.wsl.wrap([*self.cpu_prefix(), *arguments])
 
     def make_dirs(self, *paths: str) -> None:
         for path in paths:
@@ -472,43 +541,170 @@ class WslExecutionTarget:
         # bootmodes wird jetzt durchgereicht. Frueher kannte die WSL-Fassung den
         # Wert gar nicht -- ein Bau mit uefi.grub ohne grub-mkstandalone lief
         # deshalb an, statt vorher zu blockieren.
-        return run_wsl_preflight(
+        bericht = run_wsl_preflight(
             self.wsl, out_dir, installed_mb=installed_mb, bootmodes=bootmodes
         )
+        self._report_load(bericht)
+        self._report_leftovers(bericht)
+        return bericht
+
+    def _report_leftovers(self, bericht) -> None:
+        """Reste eines abgebrochenen Baus melden.
+
+        Ein Bau, der abstuerzt oder mit dem Rechner neu gestartet wird, kommt
+        nie zum Aufraeumen -- nach dem Vorfall vom 03.09.2026 standen 5,3 GB in
+        der virtuellen Platte, ohne dass irgendetwas darauf hinwies. Die
+        virtuelle Platte von WSL waechst nur, sie schrumpft nicht von selbst.
+
+        Nur ein Hinweis, keine Beanstandung: der naechste Bau funktioniert
+        auch mit Resten, er belegt bloss unnoetig Platz.
+        """
+        from .preflight import Check
+        from .wsl_build import BUILD_ROOT
+
+        try:
+            wurzel = f"{self.wsl.home()}/{BUILD_ROOT}"
+            ergebnis = self.wsl.run(["du", "-sm", wurzel], timeout=60.0)
+            if not ergebnis.ok:
+                return                      # gibt es noch nicht -- alles gut
+            belegt_mb = int(ergebnis.stdout.split()[0])
+        except Exception:
+            log.debug("Reste liessen sich nicht bestimmen", exc_info=True)
+            return
+
+        if belegt_mb < 1024:
+            return
+        bericht.checks.append(
+            Check(
+                "Reste frueherer Bauten",
+                False,
+                f"{belegt_mb / 1024:.1f} GB in der Verteilung. Meist stammt das "
+                f"von einem abgebrochenen Bau. Loeschen mit:\n"
+                f"wsl -d {self.wsl.distribution} -e rm -rf {wurzel}",
+                fatal=False,
+            )
+        )
+
+    def _report_load(self, bericht) -> None:
+        """Was der Bau sich nimmt, gehoert vor den Start -- nicht ins Protokoll.
+
+        Ohne diese Zeile erlebt der Benutzer nur, dass sein Rechner waehrend
+        des Baus zaeh wird, und weiss nicht, ob das so gehoert.
+        """
+        from .preflight import Check
+
+        self.cpu_prefix()          # ermittelt die Zahlen, falls noch nicht geschehen
+        if self._cpu_note:
+            bericht.checks.append(Check("Rechenlast", True, self._cpu_note))
+        else:
+            bericht.checks.append(
+                Check(
+                    "Rechenlast",
+                    False,        # eine echte Warnung, kein beilaeufiger Hinweis
+                    "ungebremst -- in dieser Verteilung fehlt taskset (Paket "
+                    "util-linux). Der Bau kann den Rechner waehrenddessen so "
+                    "stark auslasten, dass er kaum noch bedienbar ist.",
+                    fatal=False,
+                )
+            )
+
+    def kill_pattern(self) -> str:
+        """Woran ein Prozess dieses Baus zu erkennen ist.
+
+        Frueher stand hier ``mkarchiso`` -- und genau das war der Fehler.
+        ``mkarchiso`` ist nur das rufende Bash-Skript; die Last erzeugen seine
+        Kinder. Die Befehlszeile von mksquashfs lautet::
+
+            mksquashfs .../work/x86_64/airootfs .../work/iso/.../airootfs.sfs ...
+
+        und enthaelt das Wort "mkarchiso" nirgends. Der Abbruch ging deshalb ins
+        Leere: die Oberflaeche meldete "Abgebrochen", waehrend mksquashfs
+        ungeruehrt weiter alle Kerne belegte.
+
+        Das Arbeitsverzeichnis dagegen steht in der Befehlszeile **jedes**
+        beteiligten Prozesses -- mkarchiso, pacstrap, pacman, mksquashfs,
+        xorriso. Es ist zugleich eng genug, um nichts Fremdes zu treffen: ein
+        pacman-Aufruf des Benutzers in derselben Verteilung bleibt unbehelligt.
+        """
+        wurzel = getattr(self._paths, "root", None)
+        if wurzel is None:
+            # Vor prepare() gibt es noch nichts zu toeten; der Name des
+            # Skripts ist dann die einzige Handhabe.
+            return "mkarchiso"
+        return _as_ere_literal(str(wurzel))
+
+    def _pkill(self, pattern: str, signal: str) -> None:
+        try:
+            self.wsl.run(["pkill", f"-{signal}", "-f", pattern], timeout=30.0)
+        except Exception:
+            log.warning("pkill -%s in der Verteilung fehlgeschlagen", signal, exc_info=True)
+
+    def _still_running(self, pattern: str) -> bool:
+        """Ob drueben noch etwas laeuft. Im Zweifel: nein, aber laut."""
+        try:
+            ergebnis = self.wsl.run(["pgrep", "-f", pattern], timeout=30.0)
+        except Exception:
+            log.warning("Nachkontrolle des Abbruchs nicht moeglich", exc_info=True)
+            return False
+        return bool(ergebnis.ok and ergebnis.stdout.strip())
 
     def cancel_run(self, process, *, grace_seconds: float) -> None:
         """Den Bau drueben beenden, nicht nur den Client hier.
 
         ``wsl.exe`` ist kein Signalweiterleiter. Es zu beenden schliesst zwar die
-        Pipe -- mkarchiso laeuft in der Verteilung aber ungestoert weiter, denn
+        Pipe -- der Bau laeuft in der Verteilung aber ungestoert weiter, denn
         pacstrap und mksquashfs haengen dort an init, nicht am Windows-Prozess.
         Nach einem Abbruch blieben so ein laufender Bau und mehrere Gigabyte
         Arbeitsverzeichnis in der virtuellen Platte zurueck.
 
         Deshalb zuerst drueben, dann hier. Die Reihenfolge ist wichtig: ist der
         Client erst tot, fuehrt kein Weg mehr hinein.
+
+        Dieser Aufruf dauert im schlechtesten Fall ``grace_seconds`` plus die
+        Zeitlimits der pkill-Aufrufe. Er gehoert deshalb **nicht** auf den
+        Oberflaechenfaden -- ``BuildJob.cancel`` sorgt dafuer.
         """
-        try:
-            self.wsl.run(["pkill", "-TERM", "-f", "mkarchiso"], timeout=30.0)
-        except Exception:
-            log.warning("Abbruch in der Verteilung fehlgeschlagen", exc_info=True)
+        muster = self.kill_pattern()
+        self._pkill(muster, "TERM")
+
+        frist = time.monotonic() + grace_seconds
+        while time.monotonic() < frist:
+            if process is not None and process.poll() is not None:
+                break
+            if not self._still_running(muster):
+                break
+            time.sleep(0.5)
+
+        if self._still_running(muster):
+            log.warning("Der Bau reagierte nicht auf TERM -- wird hart beendet.")
+            self._pkill(muster, "KILL")
+            if self._still_running(muster):
+                # Ehrlich melden statt still zu schweigen: das Aufraeumen
+                # loescht sonst unter einem laufenden Prozess weg.
+                log.error(
+                    "In der Verteilung laeuft trotz Abbruch noch etwas. "
+                    "Von Hand beenden: wsl -d %s -e pkill -KILL -f %s",
+                    self.wsl.distribution,
+                    muster,
+                )
 
         if process is not None and process.poll() is None:
-            frist = time.monotonic() + grace_seconds
-            while time.monotonic() < frist:
-                if process.poll() is not None:
-                    break
-                time.sleep(0.2)
-            else:
-                try:
-                    self.wsl.run(["pkill", "-KILL", "-f", "mkarchiso"], timeout=30.0)
-                except Exception:
-                    log.debug("hartes Beenden fehlgeschlagen", exc_info=True)
             try:
                 process.terminate()
             except OSError:
                 pass
 
+
+
+# Was in einem erweiterten regulaeren Ausdruck (pkill -f) eine Sonderbedeutung
+# hat. Der Punkt ist der praktisch wichtige Fall: Pfade wie
+# "/root/.cache/archcustomiser/..." wuerden sonst mehr treffen als gemeint.
+_ERE_SPECIAL = frozenset(".^$*+?()[]{}|\\")
+
+
+def _as_ere_literal(text: str) -> str:
+    """Eine Zeichenkette so maskieren, dass pkill sie woertlich nimmt."""
+    return "".join("\\" + zeichen if zeichen in _ERE_SPECIAL else zeichen for zeichen in text)
 
 
 _DRIVE_FIXED = 3
@@ -586,6 +782,16 @@ class ContainerExecutionTarget:
             # pacstrap haengt acht Dateisysteme ein und braucht dafuer
             # CAP_SYS_ADMIN. Siehe container.py fuer die ganze Begruendung.
             befehl.append("--privileged")
+        # Dieselbe Zusicherung wie im WSL-Weg: ein Bau bekommt nie den ganzen
+        # Rechner. Hier ist es einfacher -- der Container laeuft auf demselben
+        # Kern-Vorrat wie die Oberflaeche, und --cpus versteht jede Engine.
+        # Kein --memory: eine zu knappe Grenze liesse den Kernel pacstrap
+        # mitten im Bau abschiessen, und das waere schlimmer als das Problem.
+        kerne = host_cores()
+        if kerne > 1:
+            erlaubt = cpu_budget(kerne)
+            log.info("Kerngrenze fuer den Bau: %s", describe_budget(erlaubt, kerne))
+            befehl += ["--cpus", str(erlaubt)]
         for verzeichnis in (self._work_dir, self._out_dir):
             if verzeichnis is not None:
                 befehl += ["-v", self._mount(verzeichnis)]
