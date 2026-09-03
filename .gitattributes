@@ -1,0 +1,19 @@
+# Zeilenenden festschreiben, statt sie der Einstellung des jeweiligen Klons
+# zu ueberlassen. Ohne diese Datei entscheidet core.autocrlf -- und das ist
+# auf jedem Rechner anders eingestellt.
+* text=auto
+
+# Shell-Skripte MUESSEN LF haben. Mit Windows-Zeilenenden meldet Linux
+#     bad interpreter: /usr/bin/env^M: No such file or directory
+# und das Skript startet nicht. Der Fehler ist beim Lesen unsichtbar.
+*.sh text eol=lf
+
+# Umgekehrt fuer cmd.exe: CRLF ist dort das Erwartete.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binaerdateien nie anfassen.
+*.png binary
+*.ico binary
+*.jpg binary
+*.gz  binary

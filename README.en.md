@@ -95,6 +95,17 @@ git clone https://github.com/Peter362187/ArchCustomiser.git && cd ArchCustomiser
 ```
 
 ```bash
+./archcustomiser.sh
+```
+
+The counterpart to `ArchCustomiser.bat`: it sets up the environment on first
+run and just starts the program afterwards. Every failure path names the
+command that fixes it, matched to the package manager it finds (apt, dnf,
+zypper, pacman, brew).
+
+By hand, if you prefer:
+
+```bash
 python -m venv .venv && .venv/bin/pip install -e ".[dev]"
 ```
 

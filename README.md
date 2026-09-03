@@ -218,11 +218,22 @@ Abstürze zusätzlich als Fenster an, statt still zu enden.
 Führt nichts zum Ziel: den Ordner `.venv` löschen und `ArchCustomiser.bat`
 erneut doppelklicken. Damit wird die Einrichtung von vorn gemacht.
 
-### Linux und macOS
+### Linux und macOS — der einfache Weg
 
 ```bash
 git clone https://github.com/Peter362187/ArchCustomiser.git && cd ArchCustomiser
 ```
+
+```bash
+./archcustomiser.sh
+```
+
+Das ist das Gegenstück zu `ArchCustomiser.bat` und tut dasselbe: beim ersten
+Mal richtet es die Programmumgebung selbst ein, danach startet es nur noch.
+Scheitert etwas, sagt es in einem Satz, woran — und nennt den Befehl, der es
+behebt, passend zum jeweiligen Paketverwalter (apt, dnf, zypper, pacman, brew).
+
+Von Hand geht es weiterhin:
 
 ```bash
 python -m venv .venv && .venv/bin/pip install -e ".[dev]"
@@ -245,6 +256,7 @@ Danach startet `archcustomiser` die Oberfläche.
 ## Verwendung
 
 Unter Windows: `ArchCustomiser.bat` doppelklicken.
+Unter Linux und macOS: `./archcustomiser.sh` ausführen.
 
 Sonst, mit aktivierter Programmumgebung:
 
