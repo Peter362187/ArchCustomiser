@@ -3,7 +3,7 @@
 # ArchCustomiser / Das Ultimative LARP Tool 
 
 Wenn du zu faul oder zu blöd bist um dir Arch Linux selber einzurichten ist das eine wahre Goldgrube für dich.
-Dieses Tool ermöglicht es dir eine Bootfähige Arch ISO Datei zu erstellen die du schön und einfach mit clicky bunti customisen kannst.
+Dieses Tool ermöglicht es dir eine Bootfähige Arch ISO Datei zu erstellen die du schön und einfach mit clicky bunti customisen kannst, wenn du fertig bist kannst du endlich jedem sagen das du Arch Linux verwendest obwohl du keinen Plan hast was du eigendlich tust.
 Eine bessere und genauere Anleitung gibt es hier:
 
 Grafischer Builder für eigene, auf Arch Linux basierende Live-ISOs.
